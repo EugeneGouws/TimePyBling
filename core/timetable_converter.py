@@ -105,7 +105,7 @@ if __name__ == "__main__":
     from pathlib import Path
     from core.timetable_tree import build_timetable_tree_from_file
 
-    st_file = Path("data/ST1.xlsx")
+    st_file = Path("E:\TimePyBling\data\ST1.xlsx")
     if not st_file.exists():
         print("data/ST1.xlsx not found.")
         raise SystemExit(1)

@@ -136,6 +136,8 @@ class SubBlock:
         key = self._key(assignment.subject_code, assignment.grade)
         self.assignments[key] = assignment
 
+
+
     def remove_assignment(self, subject_code: str, grade: str):
         key = self._key(subject_code, grade)
         self.assignments.pop(key, None)
@@ -330,6 +332,65 @@ class BlockTree:
         sb_b.remove_assignment(subject_b, grade_b)
         sb_b.add_assignment(assign_a)
         sb_a.add_assignment(assign_b)
+
+    def swap_subblock_contents(self, sb_name_a: str, sb_name_b: str):
+        """
+        Swap the ENTIRE contents of two subblocks.
+
+        Used for within-block day reordering: A1 <-> A3
+        This is the minor SA move — changes which cycle-day a lesson
+        falls on. Only has a visible effect in mixed blocks (H, F).
+        Both subblocks must already exist in the tree.
+        """
+        sb_a = self.get_subblock(sb_name_a[0], sb_name_a)
+        sb_b = self.get_subblock(sb_name_b[0], sb_name_b)
+
+        if sb_a is None:
+            raise ValueError(f"Subblock not found: {sb_name_a}")
+        if sb_b is None:
+            raise ValueError(f"Subblock not found: {sb_name_b}")
+
+        sb_a.assignments, sb_b.assignments = sb_b.assignments, sb_a.assignments
+
+    def swap_blocks(self, block_name_a: str, block_name_b: str):
+        """
+        Swap ALL subblock contents between two blocks.
+
+        This is the PRIMARY SA move.
+
+        Exchanges which block-letter a subject occupies, moving all 7
+        cycle-day slots atomically.  Student membership, teacher
+        assignments, and cycle-day ordering are all preserved.
+
+        Example
+        -------
+        Before:  A1..A7 = AF BALAY,  C1..C7 = SC VISSER
+        After:   A1..A7 = SC VISSER, C1..C7 = AF BALAY
+
+        Calling swap_blocks(a, b) twice returns to the original state,
+        so SA revert is free — just call it again.
+        """
+        block_a = self.blocks.get(block_name_a)
+        block_b = self.blocks.get(block_name_b)
+
+        if block_a is None:
+            raise ValueError(f"Block not found: {block_name_a}")
+        if block_b is None:
+            raise ValueError(f"Block not found: {block_name_b}")
+
+        sbs_a = block_a.sorted_subblocks()
+        sbs_b = block_b.sorted_subblocks()
+
+        if len(sbs_a) != len(sbs_b):
+            raise ValueError(
+                f"Block {block_name_a} has {len(sbs_a)} subblocks but "
+                f"block {block_name_b} has {len(sbs_b)} — cannot swap."
+            )
+
+        for sb_a, sb_b in zip(sbs_a, sbs_b):
+            sb_a.assignments, sb_b.assignments = (
+                sb_b.assignments, sb_a.assignments
+            )
 
     def set_teacher(self, subblock_name: str, subject_code: str,
                     grade: str, teacher_code: str):
