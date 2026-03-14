@@ -28,7 +28,10 @@ from core.timetable_tree  import build_timetable_tree_from_file
 from reader.exam_tree       import build_exam_tree_from_timetable_tree
 from reader.exam_clash      import build_clash_graph, dsatur_colouring, is_excluded
 from reader.verify_timetable import _find_clashes
-from optimizer.cost_function   import evaluate, load_teacher_prefs_from_xlsx, CostConfig
+from optimiser.cost_function   import evaluate, load_teacher_prefs_from_xlsx, CostConfig
+from core.timetable_converter import timetable_tree_to_block_tree
+from core.timetable_converter  import timetable_tree_to_block_tree
+from optimiser.optimiser        import SARunner, SAConfig
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -142,9 +145,11 @@ class TimePyBlingApp(tk.Tk):
 
         # ── state ──
         self.timetable_tree    = None
+        self.block_tree        = None
         self.exam_tree         = None
         self.st1_path          = None
         self.teachers_path     = None
+        self.sa_runner         = None
         self.teacher_subj_map  = {}      # {teacher_code: {subject_codes}}
         self.exclusions        = set(DEFAULT_EXCLUSIONS)
 
@@ -215,16 +220,19 @@ class TimePyBlingApp(tk.Tk):
         self.tab_verification = tk.Frame(self.notebook, bg=CLR_WHITE)
         self.tab_exams        = tk.Frame(self.notebook, bg=CLR_WHITE)
         self.tab_export       = tk.Frame(self.notebook, bg=CLR_WHITE)
+        self.tab_optimiser = tk.Frame(self.notebook, bg=CLR_WHITE)
 
         self.notebook.add(self.tab_timetable,    text="  Timetable  ")
         self.notebook.add(self.tab_verification, text="  Verification  ")
         self.notebook.add(self.tab_exams,        text="  Exams  ")
         self.notebook.add(self.tab_export,       text="  Export  ")
+        self.notebook.add(self.tab_optimiser, text="  Optimiser  ")
 
         self._build_timetable_tab()
         self._build_verification_tab()
         self._build_exam_tab()
         self._build_export_tab()
+        self._build_optimiser_tab()
 
     # ─────────────────────────────────────────────────────────
     # TAB 1 — TIMETABLE
@@ -269,7 +277,72 @@ class TimePyBlingApp(tk.Tk):
         self._style_tree(self.tt_tree)
 
     # ─────────────────────────────────────────────────────────
-    # TAB 2 — VERIFICATION
+    # TAB 2 — OPTIMISER
+    # ─────────────────────────────────────────────────────────
+    def _build_optimiser_tab(self):
+        content = tk.Frame(self.tab_optimiser, bg=CLR_WHITE, padx=12, pady=12)
+        content.pack(fill=tk.BOTH, expand=True)
+
+        # ── Parameter row ──
+        params = tk.Frame(content, bg=CLR_WHITE)
+        params.pack(fill=tk.X, pady=(0, 10))
+
+        def param(label, default, width=8):
+            tk.Label(params, text=label, bg=CLR_WHITE,
+                     font=("Helvetica", 9)).pack(side=tk.LEFT, padx=(0, 2))
+            v = tk.StringVar(value=default)
+            tk.Entry(params, textvariable=v, width=width,
+                     font=("Helvetica", 9), relief=tk.SOLID, bd=1).pack(
+                side=tk.LEFT, padx=(0, 12))
+            return v
+
+        self.sa_t_start = param("T start", "1000.0")
+        self.sa_t_min = param("T min", "0.1")
+        self.sa_cooling = param("Cooling rate", "0.9999", width=10)
+        self.sa_max_iter = param("Max iter", "500000", width=10)
+
+        # ── Button row ──
+        btn_row = tk.Frame(content, bg=CLR_WHITE)
+        btn_row.pack(fill=tk.X, pady=(0, 10))
+
+        self.sa_run_btn = tk.Button(
+            btn_row, text="Run SA",
+            command=self._sa_run,
+            bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
+            font=("Helvetica", 10, "bold"), padx=14, pady=6
+        )
+        self.sa_run_btn.pack(side=tk.LEFT)
+
+        self.sa_stop_btn = tk.Button(
+            btn_row, text="Stop",
+            command=self._sa_stop,
+            bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
+            font=("Helvetica", 10, "bold"), padx=14, pady=6,
+            state=tk.DISABLED
+        )
+        self.sa_stop_btn.pack(side=tk.LEFT, padx=8)
+
+        self.sa_status = tk.Label(
+            btn_row, text="Ready",
+            bg=CLR_WHITE, fg="#888", font=("Helvetica", 9)
+        )
+        self.sa_status.pack(side=tk.LEFT, padx=8)
+
+        # ── Log ──
+        tk.Label(content, text="Progress log",
+                 bg=CLR_WHITE, font=("Helvetica", 10, "bold")).pack(anchor=tk.W)
+
+        log_frame = tk.Frame(content, bg=CLR_WHITE)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+
+        self.sa_log = _scrolled_text(log_frame)
+        self.sa_log.tag_config("good", foreground=CLR_GREEN)
+        self.sa_log.tag_config("bad", foreground=CLR_RED)
+        self.sa_log.tag_config("info", foreground=CLR_BLUE)
+        self.sa_log.tag_config("dim", foreground="#888")
+
+    # ─────────────────────────────────────────────────────────
+    # TAB 3 — VERIFICATION
     # ─────────────────────────────────────────────────────────
 
     def _build_verification_tab(self):
@@ -337,7 +410,7 @@ class TimePyBlingApp(tk.Tk):
         self.qual_text.tag_config("dim",  foreground="#888")
 
     # ─────────────────────────────────────────────────────────
-    # TAB 3 — EXAMS
+    # TAB 4 — EXAMS
     # ─────────────────────────────────────────────────────────
 
     def _build_exam_tab(self):
@@ -433,7 +506,7 @@ class TimePyBlingApp(tk.Tk):
         self.slot_text = _scrolled_text(slot_lf)
 
     # ─────────────────────────────────────────────────────────
-    # TAB 4 — EXPORT
+    # TAB 5 — EXPORT
     # ─────────────────────────────────────────────────────────
 
     def _build_export_tab(self):
@@ -500,6 +573,7 @@ class TimePyBlingApp(tk.Tk):
 
         try:
             self.timetable_tree = build_timetable_tree_from_file(self.st1_path)
+            self.block_tree = timetable_tree_to_block_tree(self.timetable_tree)
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
             return
@@ -538,6 +612,67 @@ class TimePyBlingApp(tk.Tk):
         # Re-run verification so teacher qualification panel updates
         if self.timetable_tree:
             self._run_verification()
+
+    # ─────────────────────────────────────────────────────────
+    # SA
+    # ─────────────────────────────────────────────────────────
+
+    def _sa_run(self):
+        if not self.block_tree:
+            messagebox.showwarning("No timetable", "Load a timetable first.")
+            return
+        if self.sa_runner and self.sa_runner.is_running():
+            return
+
+        _clear(self.sa_log)
+
+        try:
+            config = SAConfig(
+                T_start=float(self.sa_t_start.get()),
+                T_min=float(self.sa_t_min.get()),
+                cooling_rate=float(self.sa_cooling.get()),
+                max_iter=int(self.sa_max_iter.get()),
+            )
+        except ValueError as e:
+            messagebox.showerror("Invalid parameter", str(e))
+            return
+
+        self.sa_run_btn.config(state=tk.DISABLED)
+        self.sa_stop_btn.config(state=tk.NORMAL)
+        self.sa_status.config(text="Running…", fg=CLR_GREEN)
+
+        self.sa_runner = SARunner(
+            bt=self.block_tree,
+            config=config,
+            progress_cb=self._sa_log_msg,
+            done_cb=self._sa_done,
+        )
+        self.sa_runner.start()
+
+    def _sa_stop(self):
+        if self.sa_runner:
+            self.sa_runner.stop()
+        self.sa_status.config(text="Stopping…", fg="#e67e22")
+
+    def _sa_log_msg(self, msg: str):
+        # Called from background thread — must schedule on main thread
+        self.after(0, lambda: _write(self.sa_log, msg + "\n"))
+
+    def _sa_done(self, result):
+        def _finish():
+            self.sa_run_btn.config(state=tk.NORMAL)
+            self.sa_stop_btn.config(state=tk.DISABLED)
+            tag = "good" if result.improved else "bad"
+            status = f"Done — cost {result.initial_cost} → {result.best_cost}"
+            self.sa_status.config(
+                text=status,
+                fg=CLR_GREEN if result.improved else CLR_RED
+            )
+            _write(self.sa_log, "\n" + result.summary() + "\n", tag)
+            # Refresh verification panel with new BlockTree state
+            self._run_verification()
+
+        self.after(0, _finish)
 
     # ─────────────────────────────────────────────────────────
     # VERIFICATION
@@ -600,7 +735,7 @@ class TimePyBlingApp(tk.Tk):
         w = self.cost_text
         _clear(w)
 
-        if not self.timetable_tree:
+        if not self.block_tree:
             return
 
         config = CostConfig()
@@ -612,7 +747,7 @@ class TimePyBlingApp(tk.Tk):
             except Exception:
                 pass
 
-        result = evaluate(self.timetable_tree, config)
+        result = evaluate(self.block_tree, config)
 
         def row(label, value, is_stub=False):
             suffix = "  *stub*" if is_stub else ""
@@ -623,7 +758,6 @@ class TimePyBlingApp(tk.Tk):
         _write(w, "─" * 42 + "\n")
         row("C_s   student clashes",     result.C_s)
         row("C_t   teacher clashes",     result.C_t)
-        row("C_lb  linked block",        result.C_lb)
         row("P_g12 Gr 12 teacher pref",  result.P_g12,  is_stub=True)
         row("P_tg  teacher grade pref",  result.P_tg,   is_stub=True)
         row("P_f   teacher free day",    result.P_f,    is_stub=True)
