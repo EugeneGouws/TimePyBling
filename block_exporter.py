@@ -18,41 +18,42 @@ If a student has no assignment in a subblock, the cell is left empty.
 Usage
 -----
     from block_exporter import export_to_xlsx
-    export_to_xlsx(block_tree, school_tree, "output/ST1_new.xlsx")
+    export_to_xlsx(block_tree, "output/ST1_new.xlsx")
+
+Note
+----
+Students and their grades are derived directly from the BlockTree.
+No external student list (school_tree) is required.
 """
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from pathlib import Path
 
-from block_tree  import BlockTree
-from school_tree import SchoolTree
+from block_tree import BlockTree
 
 
 # ---------------------------------------------------------------------------
 # STYLE CONSTANTS
-# Matching the look of the existing ST1 file for consistency
 # ---------------------------------------------------------------------------
 
-HEADER_FONT        = Font(bold=True, size=10)
-HEADER_FILL        = PatternFill("solid", fgColor="D9D9D9")
-HEADER_ALIGNMENT   = Alignment(horizontal="center", vertical="center")
+HEADER_FONT      = Font(bold=True, size=10)
+HEADER_FILL      = PatternFill("solid", fgColor="D9D9D9")
+HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
-CELL_ALIGNMENT     = Alignment(horizontal="center", vertical="center")
-CELL_FONT          = Font(size=9)
+CELL_ALIGNMENT   = Alignment(horizontal="center", vertical="center")
+CELL_FONT        = Font(size=9)
 
-BORDER_SIDE        = Side(style="thin", color="CCCCCC")
-CELL_BORDER        = Border(
+BORDER_SIDE      = Side(style="thin", color="CCCCCC")
+CELL_BORDER      = Border(
     left=BORDER_SIDE, right=BORDER_SIDE,
     top=BORDER_SIDE,  bottom=BORDER_SIDE
 )
 
-# Column widths
-COL_WIDTH_ID       = 12
-COL_WIDTH_GRADE    = 8
-COL_WIDTH_SLOT     = 14
+COL_WIDTH_ID    = 12
+COL_WIDTH_GRADE = 8
+COL_WIDTH_SLOT  = 14
 
-# Block fill colours — one per block letter for visual separation
 BLOCK_FILLS = {
     "A": PatternFill("solid", fgColor="EEF4FB"),
     "B": PatternFill("solid", fgColor="E8F5E9"),
@@ -66,41 +67,55 @@ BLOCK_FILLS = {
 
 
 # ---------------------------------------------------------------------------
-# HELPER
+# HELPERS
 # ---------------------------------------------------------------------------
 
-def _grade_num(grade_str: str) -> int:
-    """'Gr_10' -> 10"""
-    return int(grade_str.replace("Gr_", ""))
+def _grade_num(grade) -> int:
+    """
+    Convert a grade value to an integer for sorting.
+    Handles all formats produced by timetable_tree and block_tree:
+        "Gr_10"  ->  10
+        "10"     ->  10
+        "08"     ->   8
+        8        ->   8
+    """
+    return int(str(grade).replace("Gr_", ""))
+
+
+def _grade_display(grade) -> str:
+    """
+    Convert a grade value to a plain number string for the xlsx cell.
+        "Gr_10"  ->  "10"
+        "08"     ->  "08"
+        8        ->  "8"
+    """
+    return str(grade).replace("Gr_", "")
 
 
 # ---------------------------------------------------------------------------
 # MAIN EXPORT FUNCTION
 # ---------------------------------------------------------------------------
 
-def export_to_xlsx(block_tree   : BlockTree,
-                   school_tree  : SchoolTree,
-                   output_path  : str,
-                   sheet_name   : str = "Sheet1") -> Path:
+def export_to_xlsx(block_tree : BlockTree,
+                   output_path: str,
+                   sheet_name : str = "Sheet1") -> Path:
     """
     Export a BlockTree to an ST1-format xlsx file.
 
+    Students and their grades are read directly from the SlotAssignments
+    inside the tree — no external student list is needed.
+
     Parameters
     ----------
-    block_tree   : populated BlockTree
-    school_tree  : used to get all student IDs and grades
+    block_tree   : populated BlockTree (from timetable_tree_to_block_tree
+                   or from block_builder)
     output_path  : destination file path, e.g. "output/ST1_new.xlsx"
-    sheet_name   : worksheet name (default matches existing ST1)
+    sheet_name   : worksheet name (default "Sheet1" matches existing ST1)
 
     Returns
     -------
     Path to the written file.
-
-    Raises
-    ------
-    ValueError  if validation errors exist in the BlockTree
     """
-    # ---- Validate before export ----
     errors = block_tree.validate()
     if errors:
         print(f"WARNING: BlockTree has {len(errors)} validation error(s).")
@@ -108,17 +123,10 @@ def export_to_xlsx(block_tree   : BlockTree,
             print(f"  {e}")
         print("Exporting anyway — errors will appear as clashes in ST1.")
 
-    # ---- Collect all students ordered by grade then ID ----
-    all_students = _collect_students(school_tree)
-
-    # ---- Subblock column order ----
+    all_students   = _collect_students(block_tree)
     subblock_names = block_tree.all_subblock_names()
+    schedules      = _build_schedules(block_tree, all_students, subblock_names)
 
-    # ---- Build student -> schedule lookup ----
-    # { student_id: { subblock_name: st1_cell_value } }
-    schedules = _build_schedules(block_tree, all_students, subblock_names)
-
-    # ---- Write xlsx ----
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = sheet_name
@@ -140,30 +148,34 @@ def export_to_xlsx(block_tree   : BlockTree,
 # INTERNAL HELPERS
 # ---------------------------------------------------------------------------
 
-def _collect_students(school_tree: SchoolTree) -> list[tuple[int, str]]:
+def _collect_students(block_tree: BlockTree) -> list[tuple[int, str]]:
     """
-    Return a sorted list of (student_id, grade) tuples.
-    Sorted by grade number then student ID.
+    Build a sorted list of (student_id, grade) from the BlockTree itself.
+
+    A student appears in many SlotAssignments (one per subblock) but always
+    with the same grade, so we keep the first occurrence and move on.
+
+    Sorted by grade number then student ID, matching the original ST1 layout.
     """
-    students = set()
-    for grade in school_tree.all_grades():
-        node = school_tree.grades[grade]
-        for group in node.subject_groups.values():
-            for student in group.students:
-                students.add((int(student.student_id), grade))
+    students: dict[int, str] = {}
 
-    return sorted(students, key=lambda x: (_grade_num(x[1]), x[0]))
+    for _sb_name, assignment in block_tree.all_assignments():
+        for sid in assignment.student_ids:
+            if sid not in students:
+                students[sid] = assignment.grade
+
+    return sorted(
+        students.items(),
+        key=lambda x: (_grade_num(x[1]), x[0])
+    )
 
 
-def _build_schedules(block_tree     : BlockTree,
-                     all_students   : list[tuple[int, str]],
-                     subblock_names : list[str]) -> dict:
+def _build_schedules(block_tree    : BlockTree,
+                     all_students  : list[tuple[int, str]],
+                     subblock_names: list[str]) -> dict:
     """
-    Build a lookup:
-        { student_id: { subblock_name: cell_value_str } }
-
-    cell_value_str is in ST1 format: 'SUBJECT TEACHER'
-    Empty string if the student has no assignment in that slot.
+    Build { student_id: { subblock_name: 'SUBJECT TEACHER' } }.
+    Empty string where the student has no assignment in a slot.
     """
     student_ids = {sid for sid, _ in all_students}
     schedules   = {sid: {} for sid in student_ids}
@@ -180,11 +192,10 @@ def _build_schedules(block_tree     : BlockTree,
 
 
 def _write_header(ws, subblock_names: list[str]):
-    """Write the header row: Studentid | Grade | A1 | A2 | ..."""
     headers = ["Studentid", "Grade"] + subblock_names
 
     for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell           = ws.cell(row=1, column=col_idx, value=header)
         cell.font      = HEADER_FONT
         cell.fill      = HEADER_FILL
         cell.alignment = HEADER_ALIGNMENT
@@ -194,28 +205,25 @@ def _write_header(ws, subblock_names: list[str]):
 
 
 def _write_rows(ws,
-                all_students   : list[tuple[int, str]],
-                subblock_names : list[str],
-                schedules      : dict):
-    """Write one row per student."""
+                all_students  : list[tuple[int, str]],
+                subblock_names: list[str],
+                schedules     : dict):
     for row_idx, (student_id, grade) in enumerate(all_students, start=2):
-        schedule   = schedules.get(student_id, {})
-        grade_disp = grade.replace("Gr_", "")   # "Gr_10" -> "10"
+        schedule    = schedules.get(student_id, {})
+        grade_disp  = _grade_display(grade)
 
         row_data = [student_id, grade_disp] + [
             schedule.get(sb, "") for sb in subblock_names
         ]
 
         for col_idx, value in enumerate(row_data, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell           = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font      = CELL_FONT
             cell.alignment = CELL_ALIGNMENT
             cell.border    = CELL_BORDER
 
-            # Apply block colour to timetable columns
             if col_idx > 2:
-                sb_name    = subblock_names[col_idx - 3]
-                block_letter = sb_name[0]
+                block_letter = subblock_names[col_idx - 3][0]
                 fill = BLOCK_FILLS.get(block_letter)
                 if fill:
                     cell.fill = fill
@@ -224,7 +232,6 @@ def _write_rows(ws,
 
 
 def _set_column_widths(ws, subblock_names: list[str]):
-    """Set column widths for readability."""
     ws.column_dimensions["A"].width = COL_WIDTH_ID
     ws.column_dimensions["B"].width = COL_WIDTH_GRADE
 
@@ -232,28 +239,28 @@ def _set_column_widths(ws, subblock_names: list[str]):
         col_letter = openpyxl.utils.get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = COL_WIDTH_SLOT
 
-    # Freeze the first two columns and header row
     ws.freeze_panes = "C2"
 
 
 # ---------------------------------------------------------------------------
-# Entry point — test with empty tree
+# Standalone test
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from pathlib import Path
-    from school_tree  import load_from_xlsx
-    from block_tree   import BlockTree
+    from timetable_tree import build_timetable_tree_from_file
 
-    student_file = Path("data/students.xlsx")
-    school_tree  = load_from_xlsx(str(student_file))
+    st_file = Path("data/ST1.xlsx")
+    if not st_file.exists():
+        st_file = Path("ST1.xlsx")
 
-    # Build an empty tree to verify the exporter structure
-    block_tree   = BlockTree()
+    if not st_file.exists():
+        print("No ST1.xlsx found.")
+        raise SystemExit(1)
 
-    out = export_to_xlsx(
-        block_tree,
-        school_tree,
-        output_path="output/ST1_new.xlsx"
-    )
-    print(f"Done: {out}")
+    print(f"Loading: {st_file}")
+    from timetable_tree import build_timetable_tree_from_file
+    # Once timetable_tree_to_block_tree() exists, use it here:
+    # timetable_tree = build_timetable_tree_from_file(st_file)
+    # block_tree = timetable_tree_to_block_tree(timetable_tree)
+    # export_to_xlsx(block_tree, "output/ST1_new.xlsx")
+    print("Ready — wire up timetable_tree_to_block_tree() to run a full export.")
