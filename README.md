@@ -1,171 +1,109 @@
 # TimePyBling
 
-A school timetabling and data analytics platform built in Python.
+School timetable analysis tool. Reads a completed student timetable, checks it for clashes, scores it against a cost function, and schedules exams.
 
-TimePyBling ingests student subject choices and teacher qualifications,
-analyses scheduling constraints, generates conflict-free timetable blocks,
-and exports back to the ST1 format used by the school database.
+## Requirements
 
-The long-term vision is a data and analytics framework for schools and
-universities built around the timetable as the
-core data structure.
+- Python 3.13
+- `pip install pandas openpyxl`
 
----
+## Data files
+
+Place these in the `data/` folder before running:
+
+| File | Description |
+|---|---|
+| `data/ST1.xlsx` | Student timetable — one row per student, columns A1–H7 |
+| `data/teachers.xlsx` | Teacher codes and subject pools |
+
+ST1 cell format: `SUBJECT TEACHERCODE` e.g. `AF BALAY`. Empty slots can be left blank or filled with `FREE`.
+
+## Running
+
+```
+python main.py
+```
+
+This launches the UI. Load files using the buttons in the top bar.
 
 ## Project structure
 
 ```
 TimePyBling/
-├── data/                    ← Not committed — see Data files section below
-├── output/                  ← Not committed — generated ST1 exports land here
-│
-├── xlsx_loader.py           ← Generic xlsx row parser, reused by all loaders
-├── conflict_matrix.py       ← Pure conflict logic, context-free
-│
-├── school_tree.py           ← Student subject enrolment tree
-├── teacher_tree.py          ← Teacher qualification tree
-├── conflict_analyser.py     ← Timetable and exam conflict analysers
-├── check_data.py            ← Data quality gate — run before scheduling
-│
-├── timetable_tree.py        ← Reads ST1.csv / ST1.xlsx into memory
-├── exam_tree.py             ← Builds exam subject groups from timetable
-├── exam_clash.py            ← DSatur + backtracking exam slot solver
-├── main.py                  ← Entry point for exam clash workflow
-│
-├── block_tree.py            ← Core data structure for new timetable builder
-├── block_builder.py         ← Constraint-based block assignment algorithm
-├── block_exporter.py        ← Exports BlockTree to ST1-format xlsx
-│
-└── ui.py                    ← GUI interface
+├── main.py                    # Entry point — launches the UI
+├── data/
+│   ├── ST1.xlsx
+│   └── teachers.xlsx
+├── core/
+│   ├── timetable_tree.py      # Parse ST1.xlsx → TimetableTree (read-only)
+│   ├── block_tree.py          # Mutable BlockTree for SA moves
+│   └── conflict_matrix.py     # Pure shared-student conflict utility
+├── reader/
+│   ├── exam_tree.py           # Reorganise TimetableTree by grade + subject
+│   ├── exam_clash.py          # DSatur exam slot scheduling
+│   └── verify_timetable.py    # Detect student and teacher double-bookings
+├── optimizer/
+│   ├── cost_function.py       # E(T) cost evaluator
+│   └── block_exporter.py      # BlockTree → ST1.xlsx output
+└── ui/
+    └── ui.py                  # tkinter interface
 ```
 
----
+## UI tabs
 
-## Data files
+**Timetable** — browse the full timetable tree (Block → SubBlock → Class → Students). Live search by student ID, subject code, or teacher name.
 
-Data files are not committed to this repository. Place the following
-files in the `data/` folder before running any scripts.
+**Verification** — loads automatically on file open. Shows:
+- Clash report: student and teacher double-bookings
+- Cost function E(T): per-term breakdown
+- Teacher qualifications: cross-checks teacher assignments against their subject pool in teachers.xlsx
 
-### `data/students.xlsx`
+**Exams** — exam slot scheduling by grade using DSatur graph colouring. Manage subject exclusions (ST, LIB, PE, RDI excluded by default). Rebuild as needed.
 
-One row per student. No header row required — detected automatically.
+**Export** — write the timetable back to ST1.xlsx. Requires `timetable_converter.py` (not yet written — see below).
 
-| Column | Content | Example |
-|--------|---------|---------|
-| 0 | Student ID (numeric) | `480` |
-| 1 | Grade (numeric) | `8` |
-| 2+ | Subject codes, one per column | `EN`, `MA`, `AF`, `SC` |
+## Cost function E(T)
 
-Subject codes are uppercase abbreviations matching the school's
-subject register. Empty cells are ignored — students may have
-different numbers of subjects.
+| Term | Description                                    | Weight |
+|---|------------------------------------------------|---|
+| C_s | Student double-bookings                        | 10 000 |
+| C_t | Teacher double-bookings                        | 5 000 |
+| P_g12 | Gr 12 class taught by non-preferred teacher    | 400 |
+| P_tg | Teacher assigned outside preferred grades      | 100 |
+| P_f | Teacher has no free on a specific day          | 50 |
+| P_stg | Sparse subject group on consecutive cycle days | 10 |
+| P_alloc | Allocation rules Gr 9–11                       | 5 |
 
-### `data/teachers.xlsx`
+P_g12, P_tg, P_f, and P_alloc are stubs — they return 0 until the relevant optional columns are added to teachers.xlsx.
 
-One row per teacher. No header row required.
+## teachers.xlsx format
 
-| Column | Content | Example |
-|--------|---------|---------|
-| 0 | Teacher ID (numeric) | `1` |
-| 1 | Teacher code | `EG` |
-| 2+ | Subject codes they can teach, one per column | `MU`, `MA` |
+Required columns:
 
-Teachers may teach up to as many subjects as there are columns.
-Empty cells are ignored.
+| Column | Description |
+|---|---|
+| `Teacher Code` | Code used in ST1 cells e.g. `BALAY` |
+| `sua` | Primary subject code |
+| `sub` | Secondary subject code (optional) |
+| `suc` | Tertiary subject code (optional) |
 
-### `ST1.xlsx`
+Optional columns to activate preference terms:
 
-The current timetable export from the school database. Place in the
-project root (not in `data/`). Used by the exam clash workflow.
+| Column | Description                                           |
+|---|-------------------------------------------------------|
+| `gr12` | Each Gr 12 learner gets to choose one subject teacher |
+| `pref_grades` | Comma-separated e.g. `10,11,12`                       |
 
-| Column | Content |
-|--------|---------|
-| `Studentid` | Student ID (numeric) |
-| `Grade` | Grade (numeric) |
-| `A1`–`H7` | Class assignment per slot, e.g. `AF BALAY` |
+## What is not yet built
 
----
+`timetable_converter.py` — converts a TimetableTree into a BlockTree so the export and SA optimiser can run. This is the next piece to write. Once it exists, the Export tab and the simulated annealing optimiser can be wired up.
 
-## Subjects excluded from automated scheduling
+## Class label format
 
-The following subject codes are treated as manually allocated and
-excluded from conflict analysis and block assignment:
+All class labels follow `SUBJECT_TEACHERCODE_GRADE`:
 
-| Code | Reason |
-|------|--------|
-| `LIB` | Library — allocated manually |
-| `Study` | Free/study periods — allocated manually |
-| `RDI` | Placed inside the EN block automatically |
+- `AF_BALAY_08` — subject AF, teacher BALAY, grade 8
+- `MA_ALLEN_10` — subject MA, teacher ALLEN, grade 10
+- `DR_VAN_DEN_BERG_12` — teacher codes with underscores are handled correctly
 
----
-
-## Quickstart
-
-### 1. Check data quality
-
-```bash
-python check_data.py
-```
-
-Verifies all student subjects have at least one qualified teacher,
-flags bottleneck subjects, and prints conflict matrices.
-
-### 2. Run exam clash analysis
-
-```bash
-python main.py
-```
-
-Reads `ST1.xlsx` (or `ST1.csv`), builds the exam tree, and prints
-the minimum exam slot report per grade.
-
-### 3. Build and export a new timetable
-
-```bash
-python block_builder.py
-python block_exporter.py
-```
-
-Builds a BlockTree from student and teacher data and exports it
-to `output/ST1_new.xlsx` in ST1 format.
-
----
-
-## Dependencies
-
-```bash
-pip install openpyxl pandas
-```
-
-Python 3.11 or later recommended (uses `X | Y` type union syntax).
-
----
-
-## Algorithm overview
-
-The block assignment problem is NP-hard (reducible to graph colouring).
-The approach taken here mimics the manual process used by experienced
-human schedulers:
-
-1. **Precompute** legal subblock placement patterns per subject group
-2. **Score** subject groups by constraint pressure — most constrained first
-3. **Construct greedily** with forward checking to preserve future options
-4. **Repair locally** using simulated annealing or tabu search
-
-The conflict matrix is the foundation — two subject groups that share
-at least one student cannot occupy the same slot. This is the same
-logic used for exam clash detection, generalised into a reusable
-`ConflictMatrix` class.
-
-See `block_builder.py` for the full algorithm skeleton and TODO markers.
-
----
-
-## Roadmap
-
-- [ ] Stage 3: Greedy construction with forward checking
-- [ ] Stage 4: Simulated annealing repair
-- [ ] GUI for manual block editing (drag and drop)
-- [ ] Teacher load balancing and optimisation
-- [ ] Analytics layer — subject popularity, clash rates, teacher demand
-- [ ] Multi-school / district support
+Grade is always zero-padded to two digits. The subject merge `OD → DR` is applied at parse time in `timetable_tree.py`.

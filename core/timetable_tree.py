@@ -369,7 +369,7 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
                 continue
 
             raw_label = str(subject_value).strip()
-            if not raw_label:
+            if not raw_label or raw_label.upper() == "FREE":
                 continue
 
             block_name  = subblock_name[0]

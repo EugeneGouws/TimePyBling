@@ -4,7 +4,7 @@ block_tree.py
 Core data structure for the new timetable builder.
 
 Mirrors the read side (TimetableTree) but is designed to be:
-    - Built by an algorithm (block_builder.py)
+    - Populated by timetable_converter.py
     - Edited manually via a GUI
     - Exported to ST1-format xlsx (block_exporter.py)
 
