@@ -15,23 +15,29 @@ Phase 1 — DSatur (upper bound)
 Phase 2 — Backtracking (exact minimum)
     We try to beat the DSatur result by attempting to colour the graph
     with one fewer slot. If it succeeds we try again with one fewer.
-    We stop when backtracking proves the current count is impossible.
+    We stop when backtracking proves the current count is impossible,
+    or when the node counter exceeds MAX_ATTEMPTS (timeout).
     The last successful colouring is the true minimum.
+
+    Return values from _backtrack:
+        True  — valid colouring found
+        False — proven impossible with this many slots
+        None  — timed out; result is neither confirmed nor ruled out
 
 Pruning techniques used in backtracking:
     - Forward checking: after assigning a slot to a node, immediately
       check whether any unassigned neighbour now has no valid slots left.
-      If so, abandon this branch immediately.
-    - Symmetry breaking: on the first node, we always assign slot 0.
-      This prevents exploring equivalent permutations of slot labels.
-    - Node ordering: process nodes in descending degree order so the
-      most-constrained subjects are placed first.
-
-For school-sized graphs (typically 15-35 subjects per grade) this runs
-in well under a second.
+    - Symmetry breaking: on the first node, always assign slot 0.
+    - Node ordering: descending degree (most-constrained first).
 """
 
 from reader.exam_tree import ExamTree
+
+# Maximum backtrack nodes explored before falling back to DSatur result.
+# 100 000 is ample for any grade that has an exact solution reachable quickly;
+# grades where it binds will still return the DSatur result, which is optimal
+# or within one slot of optimal in practice.
+MAX_ATTEMPTS = 100_000
 
 
 # ------------------------------------------------
@@ -40,12 +46,7 @@ from reader.exam_tree import ExamTree
 def build_clash_graph(student_sets: dict) -> dict:
     """
     Build an adjacency set for each subject.
-
     Two subjects clash if their student sets have any overlap.
-
-    Returns
-    -------
-    dict  { subject_label -> set of subject_labels it clashes with }
     """
     subjects = list(student_sets.keys())
     graph    = {s: set() for s in subjects}
@@ -59,6 +60,7 @@ def build_clash_graph(student_sets: dict) -> dict:
 
     return graph
 
+
 def is_excluded(subject_label: str, exclusions: set) -> bool:
     """
     Returns True if this subject should be skipped.
@@ -66,14 +68,10 @@ def is_excluded(subject_label: str, exclusions: set) -> bool:
     exclusions can contain:
         'LIB'    -> skips LIB for ALL grades
         'MU_08'  -> skips MU only in Grade 8
-
-    Examples:
-        is_excluded('LIB_08', {'LIB'})    -> True
-        is_excluded('MU_08',  {'MU_08'})  -> True
-        is_excluded('MU_09',  {'MU_08'})  -> False
     """
-    code = subject_label.split("_")[0]          # e.g. 'LIB' from 'LIB_08'
+    code = subject_label.split("_")[0]
     return code in exclusions or subject_label in exclusions
+
 
 # ------------------------------------------------
 # PHASE 1: DSATUR (upper bound)
@@ -81,10 +79,6 @@ def is_excluded(subject_label: str, exclusions: set) -> bool:
 def dsatur_colouring(graph: dict) -> dict:
     """
     Assign slots using DSatur (Degree of Saturation / MRV).
-
-    At each step, pick the uncoloured node with the most distinct
-    slot numbers already used by its neighbours (saturation).
-    Ties broken by degree.
 
     Returns
     -------
@@ -121,28 +115,25 @@ def dsatur_colouring(graph: dict) -> dict:
 # ------------------------------------------------
 # PHASE 2: BACKTRACKING (exact minimum)
 # ------------------------------------------------
-def _backtrack(nodes, index, graph, assignment, num_slots):
+def _backtrack(nodes, index, graph, assignment, num_slots, counter):
     """
-    Recursive backtracking with forward checking.
+    Recursive backtracking with forward checking and a node counter.
 
-    Tries to colour all nodes using at most `num_slots` colours.
-    Returns True if a valid colouring was found (assignment is updated).
-    Returns False if it is impossible with this many slots.
-
-    Parameters
-    ----------
-    nodes      : list of node labels in processing order
-    index      : current position in nodes list
-    graph      : adjacency sets
-    assignment : dict being built (mutated in place)
-    num_slots  : maximum number of slots allowed
+    Returns
+    -------
+    True   — valid colouring found
+    False  — proven impossible with num_slots colours
+    None   — node limit reached; result is inconclusive
     """
+    counter[0] += 1
+    if counter[0] > MAX_ATTEMPTS:
+        return None  # timed out
+
     if index == len(nodes):
-        return True  # All nodes successfully coloured
+        return True
 
     node = nodes[index]
 
-    # Slots already used by neighbours that are already assigned
     forbidden = {
         assignment[n] for n in graph[node] if n in assignment
     }
@@ -153,8 +144,7 @@ def _backtrack(nodes, index, graph, assignment, num_slots):
 
         assignment[node] = slot
 
-        # Forward checking: for each unassigned neighbour, check that
-        # it still has at least one valid slot remaining
+        # Forward checking
         pruned = False
         for neighbour in graph[node]:
             if neighbour in assignment:
@@ -165,66 +155,64 @@ def _backtrack(nodes, index, graph, assignment, num_slots):
                 if n in assignment
             }
             if len(neighbour_forbidden) >= num_slots:
-                # This neighbour has no valid slots left — dead end
                 pruned = True
                 break
 
         if not pruned:
-            if _backtrack(nodes, index + 1, graph, assignment, num_slots):
+            result = _backtrack(nodes, index + 1, graph, assignment,
+                                num_slots, counter)
+            if result is True:
                 return True
+            if result is None:
+                # Timeout propagated — stop searching this branch
+                del assignment[node]
+                return None
 
         del assignment[node]
 
-    return False  # No valid slot found for this node
+    return False
 
 
-def exact_colouring(graph: dict, upper_bound: int) -> dict:
+def exact_colouring(graph: dict, upper_bound: int) -> tuple[dict, bool]:
     """
     Find the true minimum colouring by trying to beat the upper bound.
 
-    Starting from upper_bound - 1, we try progressively fewer slots.
-    Each attempt uses backtracking with forward checking.
-    We stop when backtracking fails — the previous success is optimal.
-
-    Nodes are ordered by descending degree so the most-constrained
-    subjects are placed first (MRV ordering).
-
-    Parameters
-    ----------
-    graph       : adjacency sets from build_clash_graph()
-    upper_bound : number of slots from DSatur (known to be achievable)
-
     Returns
     -------
-    dict  { subject_label -> slot_number (0-indexed) }
-          using the minimum number of slots found
+    (assignment, exact)
+        assignment : { subject_label -> slot_number (0-indexed) }
+        exact      : True if the result is proven optimal,
+                     False if it is the DSatur result (timeout fallback)
     """
-    # Order nodes by descending degree for better pruning
     nodes = sorted(graph.keys(), key=lambda n: len(graph[n]), reverse=True)
 
-    # Start with the DSatur result — guaranteed to be valid
     best_assignment = dsatur_colouring(graph)
-    best_slots      = upper_bound
+    exact           = True
 
-    # Try to beat it one slot at a time
     for target in range(upper_bound - 1, 0, -1):
-        attempt = {}
+        attempt  = {}
+        counter  = [0]
 
-        # Symmetry breaking: fix the first node to slot 0
         if nodes:
             attempt[nodes[0]] = 0
             start_index = 1
         else:
             start_index = 0
 
-        if _backtrack(nodes, start_index, graph, attempt, target):
+        result = _backtrack(nodes, start_index, graph, attempt,
+                            target, counter)
+
+        if result is True:
             best_assignment = attempt
-            best_slots      = target
+        elif result is None:
+            # Timed out — keep best found so far, mark as not proven exact
+            exact = False
+            break
         else:
-            # Proven impossible — best_slots is the true minimum
+            # Proven impossible — current best_assignment is optimal
             break
 
-    return best_assignment
+    return best_assignment, exact
 
 
 # ------------------------------------------------
@@ -233,11 +221,7 @@ def exact_colouring(graph: dict, upper_bound: int) -> dict:
 def print_clash_report(exam_tree: ExamTree, exclusions: set = None):
     """
     Print the full exam slot report for every grade.
-
-    Parameters
-    ----------
-    exam_tree  : built ExamTree
-    exclusions : set of subject codes to skip (e.g. {'ST', 'LIB', 'PE'})
+    Computation is done once per grade and reused for detail + summary.
     """
     if exclusions is None:
         exclusions = set()
@@ -247,6 +231,9 @@ def print_clash_report(exam_tree: ExamTree, exclusions: set = None):
     print("Subjects in the same slot share NO students")
     print("=" * 60)
     print()
+
+    # Compute once per grade, store for summary reuse
+    results = {}
 
     for grade_label in sorted(exam_tree.grades.keys()):
         grade_node = exam_tree.grades[grade_label]
@@ -263,26 +250,32 @@ def print_clash_report(exam_tree: ExamTree, exclusions: set = None):
         graph       = build_clash_graph(student_sets)
         dsatur_res  = dsatur_colouring(graph)
         upper_bound = max(dsatur_res.values()) + 1
-        assignment  = exact_colouring(graph, upper_bound)
+        assignment, exact = exact_colouring(graph, upper_bound)
         num_slots   = max(assignment.values()) + 1
 
+        results[grade_label] = {
+            "student_sets": student_sets,
+            "assignment":   assignment,
+            "num_slots":    num_slots,
+            "exact":        exact,
+        }
+
         # Group subjects by slot
-        slots = {}
+        slots: dict[int, list] = {}
         for subj, slot in assignment.items():
             slots.setdefault(slot, []).append(subj)
 
-        # Sort subjects within each slot
         for slot in slots.values():
             slot.sort()
 
-        # Sort slots by number of students writing (busiest first)
         sorted_slots = sorted(
             slots.values(),
             key=lambda group: sum(len(student_sets[s]) for s in group),
             reverse=True
         )
 
-        print(f"{grade_label}  ({num_slots} slots needed)")
+        exact_note = "" if exact else "  (DSatur fallback — may not be minimum)"
+        print(f"{grade_label}  ({num_slots} slots needed){exact_note}")
 
         for i, group in enumerate(sorted_slots, start=1):
             slot_students = set()
@@ -300,25 +293,14 @@ def print_clash_report(exam_tree: ExamTree, exclusions: set = None):
     print("SUMMARY")
     print("-" * 60)
 
-    for grade_label in sorted(exam_tree.grades.keys()):
-        grade_node = exam_tree.grades[grade_label]
+    for grade_label, r in results.items():
+        exact_flag = "" if r["exact"] else " *"
+        print(f"  {grade_label}: {r['num_slots']} slots{exact_flag}")
 
-        student_sets = {
-            label: subject.all_students()
-            for label, subject in grade_node.exam_subjects.items()
-            if not is_excluded(label, exclusions)
-        }
-
-        if not student_sets:
-            continue
-
-        graph       = build_clash_graph(student_sets)
-        dsatur_res  = dsatur_colouring(graph)
-        upper_bound = max(dsatur_res.values()) + 1
-        assignment  = exact_colouring(graph, upper_bound)
-        num_slots   = max(assignment.values()) + 1
-
-        print(f"  {grade_label}: {num_slots} slots")
+    if any(not r["exact"] for r in results.values()):
+        print()
+        print("  * DSatur fallback used — backtracking timed out.")
+        print("    Result is good but may not be the absolute minimum.")
 
     print()
 
