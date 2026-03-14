@@ -221,8 +221,8 @@ def run_sa(
                 best_cost = new_cost
         else:
             # Reject — undo the swap
-            bt.swap_assignments(sb_b, subj_b, grade_b,
-                                sb_a, subj_a, grade_a)
+            bt.swap_assignments(sb_b, subj_a, grade_a,
+                                sb_a, subj_b, grade_b)
             rejected += 1
 
         # ── Periodic progress report ──
