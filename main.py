@@ -3,7 +3,7 @@ main.py
 
 Purpose
 -------
-1. Find the student timetable file (ST1.csv preferred, ST1.xlsx fallback)
+1. Find the student timetable file
 2. Build the TimetableTree
 3. Build the ExamTree from the TimetableTree
 4. Print both trees
@@ -12,27 +12,27 @@ Usage
 -----
     python main.py
 
-The script looks for ST1.csv (or ST1.xlsx) in the same folder.
+The script looks for ST1.xlsx in the same folder.
 """
 
 from pathlib import Path
-from timetable_tree import build_timetable_tree_from_file
-from exam_tree import build_exam_tree_from_timetable_tree
-from exam_clash import print_clash_report
+from core.timetable_tree import build_timetable_tree_from_file
+from reader.exam_tree import build_exam_tree_from_timetable_tree
+from reader.exam_clash import print_clash_report
 
 
 def find_student_file(base_folder: Path) -> Path:
     """
     Look for the student timetable file.
-    Prefer CSV over xlsx since the new export is CSV.
+
     """
-    for filename in ["ST1.csv", "ST1.xlsx"]:
+    for filename in ["data/ST1.xlsx"]:
         candidate = base_folder / filename
         if candidate.exists():
             return candidate
 
     raise FileNotFoundError(
-        "Could not find ST1.csv or ST1.xlsx in the current folder. "
+        "Could not find ST1.xlsx in the current folder. "
         "Please place the exported file here and try again."
     )
 

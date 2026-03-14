@@ -3,11 +3,10 @@ timetable_tree.py
 
 Purpose
 -------
-Read a student timetable file (ST1.csv or ST1.xlsx) and build the timetable tree.
+Read a student timetable file (ST1.xlsx) and build the timetable tree.
 
 Accepted file formats
 ---------------------
-    ST1.csv
     ST1.xlsx
 
 Tree structure
@@ -305,27 +304,24 @@ def check_for_data_warnings(df: pd.DataFrame, timetable_cols: list):
 
 def load_dataframe(file_path) -> pd.DataFrame:
     """
-    Load ST1 from either a .csv or .xlsx file.
+    Load ST1 from .xlsx file.
     Raises a clear error if the format is not recognised.
     """
     path   = Path(file_path)
     suffix = path.suffix.lower()
 
-    if suffix == ".csv":
-        # Export uses semicolon delimiters and latin-1 encoding
-        return pd.read_csv(file_path, sep=";", encoding="latin-1")
-    elif suffix in (".xlsx", ".xls"):
+    if suffix in (".xlsx", ".xls"):
         return pd.read_excel(file_path)
     else:
         raise ValueError(
             f"Unsupported file format: '{suffix}'. "
-            "Please provide ST1.csv or ST1.xlsx."
+            "Please provide ST1.xlsx."
         )
 
 
 def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
     """
-    Read ST1.csv or ST1.xlsx and return a populated TimetableTree.
+    Read ST1.xlsx and return a populated TimetableTree.
 
     Each row in the file represents one student.
     Each timetable column (A1..H7 etc.) holds the class that student
@@ -389,7 +385,7 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
 # ------------------------------------------------
 if __name__ == "__main__":
 
-    for candidate in ["ST1.csv", "ST1.xlsx"]:
+    for candidate in ["data/ST1.xlsx"]:
         p = Path(candidate)
         if p.exists():
             print(f"Using: {candidate}")
@@ -397,4 +393,4 @@ if __name__ == "__main__":
             timetable_tree.print_tree()
             break
     else:
-        print("No ST1.csv or ST1.xlsx found in the current folder.")
+        print("ST1.xlsx found in the current folder.")

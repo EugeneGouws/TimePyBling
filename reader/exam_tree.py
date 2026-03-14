@@ -31,7 +31,7 @@ from every appearance into one ClassList here. Set storage means
 adding the same student twice is harmless.
 """
 
-from timetable_tree import ClassList
+from core.timetable_tree import ClassList
 
 
 # ------------------------------------------------

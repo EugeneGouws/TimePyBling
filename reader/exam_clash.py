@@ -31,7 +31,7 @@ For school-sized graphs (typically 15-35 subjects per grade) this runs
 in well under a second.
 """
 
-from exam_tree import ExamTree
+from reader.exam_tree import ExamTree
 
 
 # ------------------------------------------------

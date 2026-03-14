@@ -30,7 +30,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from pathlib import Path
 
-from block_tree import BlockTree
+from core.block_tree import BlockTree
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +247,8 @@ def _set_column_widths(ws, subblock_names: list[str]):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from timetable_tree import build_timetable_tree_from_file
 
-    st_file = Path("data/ST1.xlsx")
+    st_file = Path("../data/ST1.xlsx")
     if not st_file.exists():
         st_file = Path("ST1.xlsx")
 
@@ -258,7 +257,6 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     print(f"Loading: {st_file}")
-    from timetable_tree import build_timetable_tree_from_file
     # Once timetable_tree_to_block_tree() exists, use it here:
     # timetable_tree = build_timetable_tree_from_file(st_file)
     # block_tree = timetable_tree_to_block_tree(timetable_tree)

@@ -75,7 +75,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
-from timetable_tree import TimetableTree
+from core.timetable_tree import TimetableTree
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -583,24 +583,24 @@ def load_teacher_prefs_from_xlsx(path: str) -> TeacherPreferences:
 
 if __name__ == "__main__":
     from pathlib import Path
-    from timetable_tree import build_timetable_tree_from_file
+    from core.timetable_tree import build_timetable_tree_from_file
 
     st_file = None
-    for candidate in ["data/ST1.xlsx", "ST1.csv"]:
+    for candidate in ["data/ST1.xlsx"]:
         p = Path(candidate)
         if p.exists():
             st_file = p
             break
 
     if st_file is None:
-        print("No ST1.xlsx or ST1.csv found in current folder.")
+        print("No ST1.xlsx found in current folder.")
         raise SystemExit(1)
 
     print(f"Loading: {st_file}")
     tree = build_timetable_tree_from_file(st_file)
 
     config = CostConfig()
-    teacher_file = Path("data/teachers.xlsx")
+    teacher_file = Path("../data/teachers.xlsx")
     if teacher_file.exists():
         print(f"Loading teacher preferences: {teacher_file}")
         config.teacher_prefs = load_teacher_prefs_from_xlsx(str(teacher_file))

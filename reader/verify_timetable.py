@@ -29,7 +29,7 @@ Returns
 
 from __future__ import annotations
 from collections import defaultdict
-from timetable_tree import TimetableTree
+from core.timetable_tree import TimetableTree
 
 
 # ---------------------------------------------------------------------------
@@ -240,9 +240,9 @@ def _print_summary(student_clashes: list, teacher_clashes: list):
 
 if __name__ == "__main__":
     from pathlib import Path
-    from timetable_tree import build_timetable_tree_from_file
+    from core.timetable_tree import build_timetable_tree_from_file
 
-    for candidate in ["ST1.csv", "data/ST1.xlsx"]:
+    for candidate in ["data/ST1.xlsx"]:
         p = Path(candidate)
         if p.exists():
             print(f"Loading: {candidate}")
@@ -250,4 +250,4 @@ if __name__ == "__main__":
             print_clash_report(tree)
             break
     else:
-        print("No ST1.csv or ST1.xlsx found in the current folder.")
+        print("ST1.xlsx found in the current folder.")
