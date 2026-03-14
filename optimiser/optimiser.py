@@ -3,89 +3,233 @@ optimiser.py
 ------------
 Simulated annealing optimiser for the school timetable.
 
-Move set (two legal moves only):
-    Major move : swap_blocks(a, b)        — swaps all 7 subblots of block A with B
-    Minor move : swap_subblock_contents   — swaps two individual slots within a block
-                 (only useful for mixed blocks like H; skip for now)
+Public API
+----------
+    SAConfig   — dataclass of SA hyperparameters
+    SAResult   — result object passed to done_cb
+    SARunner   — runs the SA on a background thread; called by the UI
 
-The SA seeds from the real timetable via timetable_tree_to_block_tree(),
-so it always starts from a valid, fully-populated state.
+Move set
+--------
+    swap_blocks(a, b)  — atomically swaps all 7 subblock contents between
+                         two block letters.  This is the ONLY legal SA move.
+                         Calling it twice reverts the state, so reject is free.
+
+Seeding
+-------
+    The SA receives an already-converted BlockTree (self.block_tree from the UI).
+    It works on an internal deep-copy; at the end it writes the best solution
+    back into the original bt.blocks in-place so the UI's cost panel refreshes
+    correctly without needing to reload the file.
 """
 
-import random
-import math
 import copy
-from pathlib import Path
+import math
+import random
+import threading
+from dataclasses import dataclass
 
-from core.timetable_tree    import build_timetable_tree_from_file
-from core.timetable_converter import timetable_tree_to_block_tree
-from core.block_tree         import BlockTree
-from optimiser.cost_function import evaluate
-from optimiser.block_exporter import export_to_xlsx
+from core.block_tree          import BlockTree
+from optimiser.cost_function  import evaluate, CostConfig
 
 
-def optimise(
-    st1_path      : Path,
-    output_path   : Path,
-    T_start       : float = 1000.0,
-    T_min         : float = 1.0,
-    cooling_rate  : float = 0.995,
-    max_iterations: int   = 10_000,
-    progress_cb         = None,   # optional: callable(iteration, score, T)
-) -> tuple[BlockTree, float]:
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class SAConfig:
+    """Hyperparameters for the simulated annealing run."""
+    T_start      : float = 1_000.0
+    T_min        : float = 0.1
+    cooling_rate : float = 0.9999
+    max_iter     : int   = 500_000
+    log_every    : int   = 5_000     # how often to emit a progress line
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESULT
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class SAResult:
     """
-    Run simulated annealing on the timetable loaded from st1_path.
+    Returned (via done_cb) when the SA finishes or is stopped.
 
-    Returns (best_block_tree, best_score).
-    Exports the best solution to output_path automatically.
+    Attributes
+    ----------
+    initial_cost  : E(T) of the timetable before SA started
+    best_cost     : lowest E(T) seen during the run
+    final_cost    : E(T) at the moment the run ended (may be > best_cost
+                    if the run was stopped mid-improvement)
+    iterations    : number of moves attempted
+    accepted      : number of accepted moves
+    improved      : True if best_cost < initial_cost
+    stopped_early : True if stop() was called before the run completed
+    """
+    initial_cost  : float
+    best_cost     : float
+    final_cost    : float
+    iterations    : int
+    accepted      : int
+    improved      : bool
+    stopped_early : bool
+
+    def summary(self) -> str:
+        direction = "↓" if self.improved else "→"
+        pct = (
+            100.0 * (self.initial_cost - self.best_cost) / self.initial_cost
+            if self.initial_cost > 0 else 0.0
+        )
+        lines = [
+            f"{'─' * 44}",
+            f"  SA result",
+            f"{'─' * 44}",
+            f"  Initial cost   : {self.initial_cost:>10.1f}",
+            f"  Best cost      : {self.best_cost:>10.1f}  {direction}  ({pct:.2f}% improvement)",
+            f"  Iterations     : {self.iterations:>10,}",
+            f"  Accepted moves : {self.accepted:>10,}",
+            f"{'─' * 44}",
+        ]
+        if self.stopped_early:
+            lines.append("  (run stopped early by user)")
+        return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUNNER
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SARunner:
+    """
+    Runs the SA optimiser on a background thread.
+
+    Parameters
+    ----------
+    bt          : the BlockTree already loaded in the UI (self.block_tree).
+                  The SA works on an internal deep-copy; at the end the best
+                  solution is written back into bt.blocks in-place so the
+                  UI's cost panel reflects the improved timetable automatically.
+    config      : SAConfig — all defaults are sensible
+    progress_cb : callable(msg: str) — called periodically with a log line.
+                  Invoked from the background thread; the UI wraps it with
+                  self.after(0, ...) so tkinter safety is handled there.
+    done_cb     : callable(SAResult) — called once when the run finishes or
+                  is stopped.  Also invoked from the background thread.
+    cost_config : CostConfig passed to evaluate(); None uses defaults.
     """
 
-    # ------------------------------------------------------------------ #
-    # 1. Seed from the real timetable — NEVER build from scratch
-    # ------------------------------------------------------------------ #
-    tt = build_timetable_tree_from_file(st1_path)
-    bt = timetable_tree_to_block_tree(tt)
+    def __init__(self,
+                 bt          : BlockTree,
+                 config      : SAConfig   = None,
+                 progress_cb             = None,
+                 done_cb                 = None,
+                 cost_config : CostConfig = None):
 
-    score      = evaluate(bt)
-    best_bt    = copy.deepcopy(bt)
-    best_score = score
+        self._bt          = bt
+        self._config      = config      or SAConfig()
+        self._progress_cb = progress_cb or (lambda msg: None)
+        self._done_cb     = done_cb     or (lambda result: None)
+        self._cost_config = cost_config or CostConfig()
 
-    block_names = list(bt.blocks.keys())   # ["A","B","C","D","E","F","G","H"]
-    T           = T_start
-    iteration   = 0
+        self._stop_event = threading.Event()
+        self._thread     = None
 
-    # ------------------------------------------------------------------ #
-    # 2. SA loop
-    # ------------------------------------------------------------------ #
-    while T > T_min and iteration < max_iterations:
+    # ------------------------------------------------------------------
+    # Public control API
+    # ------------------------------------------------------------------
 
-        # Propose: two distinct random block letters
-        a, b = random.sample(block_names, 2)
+    def start(self):
+        """Launch the SA on a daemon background thread."""
+        if self.is_running():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
-        # Apply move
-        bt.swap_blocks(a, b)
-        new_score = evaluate(bt)
-        delta     = new_score - score
+    def stop(self):
+        """Signal the SA to stop after the current iteration."""
+        self._stop_event.set()
 
-        # Accept or reject
-        if delta < 0 or random.random() < math.exp(-delta / T):
-            score = new_score                   # keep
-            if score < best_score:
-                best_score = score
-                best_bt    = copy.deepcopy(bt)
-        else:
-            bt.swap_blocks(a, b)               # revert — swap is its own inverse
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
-        T         *= cooling_rate
-        iteration += 1
+    # ------------------------------------------------------------------
+    # SA loop  (runs on background thread)
+    # ------------------------------------------------------------------
 
-        if progress_cb:
-            progress_cb(iteration, score, T)
+    def _run(self):
+        cfg  = self._config
+        log  = self._progress_cb
+        stop = self._stop_event
 
-    # ------------------------------------------------------------------ #
-    # 3. Export the best solution found
-    # ------------------------------------------------------------------ #
-    export_to_xlsx(best_bt, str(output_path))
-    print(f"Done. Best score: {best_score:.1f}  (started: {evaluate(timetable_tree_to_block_tree(tt)):.1f})")
+        # Work on a deep copy — never mutate the UI's bt mid-run
+        bt          = copy.deepcopy(self._bt)
+        block_names = list(bt.blocks.keys())
 
-    return best_bt, best_score
+        initial_score = evaluate(bt, self._cost_config).total
+        score         = initial_score
+        best_bt       = copy.deepcopy(bt)
+        best_score    = score
+
+        T          = cfg.T_start
+        iteration  = 0
+        accepted   = 0
+
+        log(f"SA started  |  blocks: {block_names}  |  initial E(T): {initial_score:.1f}")
+        log(f"Config: T_start={cfg.T_start}  T_min={cfg.T_min}  "
+            f"cooling={cfg.cooling_rate}  max_iter={cfg.max_iter:,}")
+        log("─" * 60)
+
+        while T > cfg.T_min and iteration < cfg.max_iter:
+
+            if stop.is_set():
+                break
+
+            # ── Propose: two distinct block letters ──────────────────
+            a, b = random.sample(block_names, 2)
+
+            # ── Apply ────────────────────────────────────────────────
+            bt.swap_blocks(a, b)
+            new_score = evaluate(bt, self._cost_config).total
+            delta     = new_score - score
+
+            # ── Accept / reject ──────────────────────────────────────
+            if delta < 0 or random.random() < math.exp(-delta / T):
+                score    = new_score
+                accepted += 1
+                if score < best_score:
+                    best_score = score
+                    best_bt    = copy.deepcopy(bt)
+            else:
+                bt.swap_blocks(a, b)   # revert — swap is its own inverse
+
+            T         *= cfg.cooling_rate
+            iteration += 1
+
+            # ── Periodic progress line ────────────────────────────────
+            if iteration % cfg.log_every == 0:
+                log(f"  iter {iteration:>7,}  |  T={T:>8.3f}  "
+                    f"|  current={score:>8.1f}  |  best={best_score:>8.1f}")
+
+        # ── Write best solution back into the original bt in-place ───
+        # Updates self.block_tree in the UI without a separate assignment.
+        # The Export tab and cost panel will both see the improved timetable.
+        self._bt.blocks = best_bt.blocks
+
+        stopped_early = stop.is_set() and iteration < cfg.max_iter
+        result = SAResult(
+            initial_cost  = initial_score,
+            best_cost     = best_score,
+            final_cost    = score,
+            iterations    = iteration,
+            accepted      = accepted,
+            improved      = best_score < initial_score,
+            stopped_early = stopped_early,
+        )
+
+        log("─" * 60)
+        log(f"SA finished  |  {iteration:,} iterations  |  "
+            f"{initial_score:.1f} → {best_score:.1f}")
+
+        self._done_cb(result)
