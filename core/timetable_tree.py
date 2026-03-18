@@ -155,6 +155,34 @@ class TimetableTree:
 
 
 # ------------------------------------------------
+# SERIALISATION
+# ------------------------------------------------
+
+def timetable_tree_to_dict(tree: "TimetableTree") -> dict:
+    """Serialise a TimetableTree to a plain dict suitable for json.dump."""
+    out: dict = {}
+    for block_name, block in tree.blocks.items():
+        out[block_name] = {}
+        for sb_name, subblock in block.subblocks.items():
+            out[block_name][sb_name] = {}
+            for cl_label, cl in subblock.class_lists.items():
+                out[block_name][sb_name][cl_label] = sorted(
+                    cl.student_list.students)
+    return out
+
+
+def timetable_tree_from_dict(data: dict) -> "TimetableTree":
+    """Reconstruct a TimetableTree from a dict produced by timetable_tree_to_dict."""
+    tree = TimetableTree()
+    for block_name, subblocks in data.items():
+        for sb_name, class_lists in subblocks.items():
+            for cl_label, students in class_lists.items():
+                for sid in students:
+                    tree.add_entry(block_name, sb_name, cl_label, int(sid))
+    return tree
+
+
+# ------------------------------------------------
 # HELPER FUNCTIONS
 # ------------------------------------------------
 

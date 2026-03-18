@@ -6,7 +6,6 @@ Tabs
   Timetable    — browse Block → SubBlock → Class → Students, with live search
   Verification — clash report, data integrity, schedulable pairs
   Exams        — exam slot scheduling + dated exam timetable per grade
-  Export       — write optimised ST1.xlsx
 """
 
 import json
@@ -17,7 +16,9 @@ from datetime import date, timedelta
 from collections import defaultdict
 import pandas as pd
 
-from core.timetable_tree     import build_timetable_tree_from_file
+from core.timetable_tree     import (build_timetable_tree_from_file,
+                                      timetable_tree_to_dict,
+                                      timetable_tree_from_dict)
 from core.conflict_matrix    import ConflictMatrix
 from reader.exam_tree        import build_exam_tree_from_timetable_tree
 from reader.verify_timetable import _find_clashes
@@ -144,8 +145,9 @@ class TimePyBlingApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("TimePyBling")
-        self.geometry("1200x800")
         self.configure(bg=CLR_BG)
+        self.minsize(900, 600)
+        self.after(0, lambda: self.state("zoomed"))
 
         self.timetable_tree        = None
         self.exam_tree             = None
@@ -171,14 +173,22 @@ class TimePyBlingApp(tk.Tk):
     # ─────────────────────────────────────────────────────────
 
     def _auto_load(self):
-        candidates = [
-            r"E:\TimePyBling\data\ST12026.xlsx",
+        # Prefer a pre-exported state file so the .xlsx is not needed at runtime
+        state_candidates = [
+            "data/timetable_state.json",
+        ]
+        for c in state_candidates:
+            p = Path(c)
+            if p.exists():
+                self._load_state_json(p)
+                return
+        xlsx_candidates = [
             "data/ST1 2026.xlsx",
             "data/ST12026.xlsx",
             "data/ST1_2026.xlsx",
             "data/ST1.xlsx",
         ]
-        for c in candidates:
+        for c in xlsx_candidates:
             p = Path(c)
             if p.exists():
                 self._load_st1_path(p)
@@ -209,15 +219,6 @@ class TimePyBlingApp(tk.Tk):
                                    font=("Helvetica", 9))
         self.st1_label.pack(side=tk.LEFT, padx=(6, 20))
 
-        tk.Button(bar, text="Load Teachers", command=self._load_teachers,
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10, pady=3).pack(side=tk.LEFT)
-
-        self.teachers_label = tk.Label(bar, text="No teachers loaded",
-                                        bg=CLR_HEADER, fg=CLR_MID,
-                                        font=("Helvetica", 9))
-        self.teachers_label.pack(side=tk.LEFT, padx=(6, 20))
-        # "Load Students — Coming soon" removed (REMOVE)
 
     def _build_notebook(self):
         self.notebook = ttk.Notebook(self)
@@ -226,17 +227,14 @@ class TimePyBlingApp(tk.Tk):
         self.tab_timetable    = tk.Frame(self.notebook, bg=CLR_WHITE)
         self.tab_verification = tk.Frame(self.notebook, bg=CLR_WHITE)
         self.tab_exams        = tk.Frame(self.notebook, bg=CLR_WHITE)
-        self.tab_export       = tk.Frame(self.notebook, bg=CLR_WHITE)
 
         self.notebook.add(self.tab_timetable,    text="  Timetable  ")
         self.notebook.add(self.tab_verification, text="  Verification  ")
         self.notebook.add(self.tab_exams,        text="  Exams  ")
-        self.notebook.add(self.tab_export,       text="  Export  ")
 
         self._build_timetable_tab()
         self._build_verification_tab()
         self._build_exam_tab()
-        self._build_export_tab()
 
     # ─────────────────────────────────────────────────────────
     # TAB 1 — TIMETABLE
@@ -343,11 +341,10 @@ class TimePyBlingApp(tk.Tk):
         tk.Label(left_top, text="Exam Tree", bg=CLR_WHITE,
                  font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
 
-        # BUG 5: Import / Export buttons
-        tk.Button(left_top, text="Export…", command=self._export_exam_state,
+        tk.Button(left_top, text="Save State…", command=self._export_exam_state,
                   bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=(2, 0))
-        tk.Button(left_top, text="Import…", command=self._import_exam_state,
+        tk.Button(left_top, text="Load State…", command=self._import_exam_state,
                   bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=2)
         tk.Button(left_top, text="Rebuild", command=self._rebuild_exam,
@@ -595,41 +592,6 @@ class TimePyBlingApp(tk.Tk):
         self.exam_cost_result_label.pack(side=tk.LEFT, padx=6)
 
     # ─────────────────────────────────────────────────────────
-    # TAB 4 — EXPORT
-    # ─────────────────────────────────────────────────────────
-
-    def _build_export_tab(self):
-        content = tk.Frame(self.tab_export, bg=CLR_WHITE, padx=16, pady=16)
-        content.pack(fill=tk.BOTH, expand=True)
-
-        path_frame = tk.Frame(content, bg=CLR_WHITE)
-        path_frame.pack(fill=tk.X, pady=(0, 12))
-        tk.Label(path_frame, text="Output path:", bg=CLR_WHITE,
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
-        self.export_path_var = tk.StringVar(value="output/ST1_optimised.xlsx")
-        tk.Entry(path_frame, textvariable=self.export_path_var,
-                 font=("Helvetica", 10), relief=tk.SOLID, bd=1,
-                 width=50).pack(side=tk.LEFT, padx=8)
-        tk.Button(path_frame, text="Browse…",
-                  command=self._browse_export_path,
-                  bg=CLR_LIGHT, font=("Helvetica", 9),
-                  relief=tk.FLAT, padx=8).pack(side=tk.LEFT)
-
-        tk.Button(content, text="Export ST1.xlsx", command=self._export,
-                  bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 11, "bold"), padx=16, pady=8
-                  ).pack(anchor=tk.W, pady=(0, 12))
-
-        tk.Label(content, text="Export log", bg=CLR_WHITE,
-                 font=("Helvetica", 10, "bold")).pack(anchor=tk.W)
-        log_frame = tk.Frame(content, bg=CLR_WHITE)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        self.export_log = _scrolled_text(log_frame)
-        self.export_log.tag_config("ok",   foreground=CLR_GREEN)
-        self.export_log.tag_config("err",  foreground=CLR_RED)
-        self.export_log.tag_config("info", foreground=CLR_BLUE)
-
-    # ─────────────────────────────────────────────────────────
     # LOAD
     # ─────────────────────────────────────────────────────────
 
@@ -642,12 +604,10 @@ class TimePyBlingApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
             return
-        suggested = path.parent / "ST1_optimised.xlsx"
-        self.export_path_var.set(str(suggested))
         self._populate_timetable_tree()
         self._rebuild_exam()
         self._run_verification()
-        self.notebook.select(self.tab_exams)
+        self.notebook.select(self.tab_verification)
 
     def _load_st1(self):
         path = filedialog.askopenfilename(
@@ -666,7 +626,6 @@ class TimePyBlingApp(tk.Tk):
         if not path:
             return
         self.teachers_path = Path(path)
-        self.teachers_label.config(text=self.teachers_path.name, fg=CLR_WHITE)
         try:
             self.teacher_subj_map = _load_teacher_subject_map(self.teachers_path)
         except Exception as e:
@@ -888,6 +847,25 @@ class TimePyBlingApp(tk.Tk):
             self.ex_tree.selection_set(to_select)
             self.ex_tree.see(to_select[0])
 
+    def _navigate_to_exam_subject(self, subject: str, grade: str, popout=None):
+        if popout:
+            popout.destroy()
+        self.notebook.select(self.tab_exams)
+        for grade_item in self.ex_tree.get_children():
+            if self.ex_tree.item(grade_item, "text") != grade:
+                continue
+            self.ex_tree.item(grade_item, open=True)
+            for subj_item in self.ex_tree.get_children(grade_item):
+                tags = self.ex_tree.item(subj_item, "tags")
+                if "subject" not in (tags or []):
+                    continue
+                vals = self.ex_tree.item(subj_item, "values")
+                if vals and vals[0] == subject and vals[1] == grade:
+                    self.ex_tree.selection_set(subj_item)
+                    self.ex_tree.see(subj_item)
+                    self._on_exam_tree_select()
+                    return
+
     def _on_exam_tree_select(self, event=None):
         sel = self.ex_tree.selection()
         if not sel:
@@ -965,6 +943,8 @@ class TimePyBlingApp(tk.Tk):
         sel = self.paper_listbox.curselection()
         if not sel:
             return
+        if not self.paper_registry:
+            return
         tree_sel = self.ex_tree.selection()
         if not tree_sel:
             return
@@ -1036,9 +1016,9 @@ class TimePyBlingApp(tk.Tk):
         self._on_exclusion_change()
 
     def _on_exclusion_change(self):
-        """Update tree labels and slot summary — no file re-read."""
         expanded, selected_pairs = self._exam_tree_get_state()
         self._refresh_exclusion_listbox()
+        self._rebuild_exam()
         self._populate_exam_tree()
         self._exam_tree_restore_state(expanded, selected_pairs)
         self._update_session_count_label()
@@ -1146,7 +1126,7 @@ class TimePyBlingApp(tk.Tk):
 
     def _export_exam_state(self):
         path = filedialog.asksaveasfilename(
-            title="Export exam state",
+            title="Save timetable state",
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
         if not path:
@@ -1160,6 +1140,8 @@ class TimePyBlingApp(tk.Tk):
                     papers_data[f"{subj}_{grade_num}"] = [
                         f"P{p.paper_number}" for p in ps]
         data = {
+            "timetable_tree": (timetable_tree_to_dict(self.timetable_tree)
+                               if self.timetable_tree else None),
             "exclusions": sorted(self.exclusions),
             "papers":     papers_data,
             "session": {
@@ -1172,13 +1154,13 @@ class TimePyBlingApp(tk.Tk):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
-            messagebox.showinfo("Exported", f"Exam state saved to:\n{path}")
+            messagebox.showinfo("Saved", f"State saved to:\n{path}")
         except Exception as e:
-            messagebox.showerror("Export Error", str(e))
+            messagebox.showerror("Save Error", str(e))
 
     def _import_exam_state(self):
         path = filedialog.askopenfilename(
-            title="Import exam state",
+            title="Load timetable state",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
         if not path:
             return
@@ -1186,13 +1168,42 @@ class TimePyBlingApp(tk.Tk):
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception as e:
-            messagebox.showerror("Import Error", str(e))
+            messagebox.showerror("Load Error", str(e))
             return
+        self._apply_state(data, source_label=Path(path).name)
+        messagebox.showinfo("Loaded", f"State loaded from:\n{path}")
 
+    def _load_state_json(self, path: Path):
+        """Load a saved state JSON without showing a dialog (used by auto-load)."""
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as e:
+            messagebox.showerror("Auto-load Error", str(e))
+            return
+        self._apply_state(data, source_label=path.name)
+
+    def _apply_state(self, data: dict, source_label: str = "state"):
+        """Restore full app state from a previously saved dict."""
+        # ── Timetable tree ──────────────────────────────────────
+        if data.get("timetable_tree"):
+            try:
+                self.timetable_tree = timetable_tree_from_dict(
+                    data["timetable_tree"])
+                self.st1_path = None
+                self.st1_label.config(text=source_label, fg=CLR_WHITE)
+                self._populate_timetable_tree()
+            except Exception as e:
+                messagebox.showerror("Load Error",
+                                     f"Could not restore timetable:\n{e}")
+                return
+
+        # ── Exclusions ──────────────────────────────────────────
         if "exclusions" in data:
             self.exclusions = set(data["exclusions"])
             self._refresh_exclusion_listbox()
 
+        # ── Session settings ────────────────────────────────────
         if "session" in data:
             s = data["session"]
             if "start" in s:
@@ -1205,11 +1216,11 @@ class TimePyBlingApp(tk.Tk):
                 self._pm_var.set(bool(s["pm"]))
             self._sessions = None
 
-        # Rebuild from file to get fresh P1 registry honoring new exclusions
+        # ── Rebuild paper registry from (restored) timetable ────
         if self.timetable_tree:
             self._rebuild_exam()
 
-        # Restore extra papers (P2, P3)
+        # ── Restore extra papers (P2, P3) ───────────────────────
         if "papers" in data and self.paper_registry:
             for subj_grade, paper_nums in data["papers"].items():
                 parts = subj_grade.split("_")
@@ -1226,8 +1237,9 @@ class TimePyBlingApp(tk.Tk):
                     self.paper_registry.add_paper(subj, grade)
 
         self._populate_exam_tree()
+        self._run_verification()
         self._update_session_count_label()
-        messagebox.showinfo("Imported", f"Exam state loaded from:\n{path}")
+        self.notebook.select(self.tab_verification)
 
     # ─────────────────────────────────────────────────────────
     # EXAM COST FUNCTION  (BUG 3 — exam tab)
@@ -1282,8 +1294,13 @@ class TimePyBlingApp(tk.Tk):
             return
         sessions = self._get_effective_sessions()
         if sessions is None:
-            messagebox.showerror("Invalid dates",
-                                  "Enter valid start and end dates (YYYY-MM-DD).")
+            try:
+                start = date.fromisoformat(self.sched_start_var.get().strip())
+                end   = date.fromisoformat(self.sched_end_var.get().strip())
+                msg = "End date must be on or after start date."
+            except ValueError:
+                msg = "Enter valid start and end dates (YYYY-MM-DD)."
+            messagebox.showerror("Invalid dates", msg)
             return
         if not sessions:
             messagebox.showerror("No sessions",
@@ -1706,11 +1723,24 @@ class TimePyBlingApp(tk.Tk):
                                                   sticky="nsew", padx=1, pady=1)
             for ci, grade in enumerate(grades):
                 subjects = sorted(grid[slot_idx][grade])
-                cell = ", ".join(subjects) if subjects else ""
-                tk.Label(gf, text=cell, font=("Courier", 8),
-                         bg=row_bg, width=COL_W, anchor="center",
-                         relief=tk.RIDGE, bd=1).grid(row=ri + 1, column=ci + 1,
-                                                      sticky="nsew", padx=1, pady=1)
+                if not subjects:
+                    tk.Label(gf, text="", font=("Courier", 8),
+                             bg=row_bg, width=COL_W, anchor="center",
+                             relief=tk.RIDGE, bd=1).grid(
+                                 row=ri + 1, column=ci + 1,
+                                 sticky="nsew", padx=1, pady=1)
+                else:
+                    cell_frame = tk.Frame(gf, bg=row_bg, relief=tk.RIDGE, bd=1)
+                    cell_frame.grid(row=ri + 1, column=ci + 1,
+                                    sticky="nsew", padx=1, pady=1)
+                    for subj in subjects:
+                        lbl = tk.Label(cell_frame, text=subj, font=("Courier", 8),
+                                       bg=row_bg, width=COL_W, anchor="center",
+                                       cursor="hand2")
+                        lbl.pack(fill=tk.X)
+                        lbl.bind("<Button-1>",
+                                 lambda e, s=subj, g=grade, p=top:
+                                 self._navigate_to_exam_subject(s, g, p))
 
         gf.update_idletasks()
         canvas.configure(scrollregion=canvas.bbox("all"))
@@ -1747,9 +1777,13 @@ class TimePyBlingApp(tk.Tk):
                 parent=top)
 
     def _save_schedule_pdf(self, path, grades, grid, slot_meta, all_slots):
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-        from reportlab.lib import colors
+        try:
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+            from reportlab.lib import colors
+        except ImportError as e:
+            messagebox.showerror("PDF Error", f"reportlab not installed:\n{e}")
+            return
 
         doc = SimpleDocTemplate(path, pagesize=landscape(A4),
                                 leftMargin=18, rightMargin=18,
@@ -1782,7 +1816,10 @@ class TimePyBlingApp(tk.Tk):
             bg = am_bg if session == "AM" else pm_bg
             style_cmds.append(("BACKGROUND", (0, ri), (-1, ri), bg))
         table.setStyle(TableStyle(style_cmds))
-        doc.build([table])
+        try:
+            doc.build([table])
+        except Exception as e:
+            messagebox.showerror("PDF Error", f"Failed to write PDF:\n{e}")
 
     def _save_schedule_txt(self, path, grades, grid, slot_meta, all_slots):
         col_w = 14
@@ -1799,40 +1836,6 @@ class TimePyBlingApp(tk.Tk):
             lines.append(row)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
-
-    # ─────────────────────────────────────────────────────────
-    # EXPORT
-    # ─────────────────────────────────────────────────────────
-
-    def _browse_export_path(self):
-        path = filedialog.asksaveasfilename(
-            title="Save optimised timetable as",
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx")])
-        if path:
-            self.export_path_var.set(path)
-
-    def _export(self):
-        w = self.export_log
-        _clear(w)
-        if not self.timetable_tree:
-            _write(w, "No timetable loaded — nothing to export.\n", "err")
-            return
-        out_path = self.export_path_var.get().strip()
-        if not out_path:
-            _write(w, "No output path set.\n", "err")
-            return
-        _write(w, "Verifying timetable before export…\n", "info")
-        student_clashes, teacher_clashes = _find_clashes(self.timetable_tree)
-        if student_clashes or teacher_clashes:
-            _write(w, f"WARNING: {len(student_clashes)} student clash(es), "
-                      f"{len(teacher_clashes)} teacher clash(es) — "
-                      f"exporting anyway.\n", "err")
-        else:
-            _write(w, "Verification passed ✓\n", "ok")
-        _write(w, "\nExport not yet available.\n", "err")
-        _write(w, "Waiting on:  timetable_converter.timetable_tree_to_block_tree()\n",
-               "info")
 
     # ─────────────────────────────────────────────────────────
     # STYLING

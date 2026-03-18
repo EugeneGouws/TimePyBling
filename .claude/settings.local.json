@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Read(//e//**)",
+      "Bash(dir)"
+    ]
+  }
+}
