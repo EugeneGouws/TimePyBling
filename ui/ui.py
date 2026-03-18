@@ -12,15 +12,16 @@ Tabs
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from datetime import date
+from datetime import date, timedelta
 import pandas as pd
 
 from core.timetable_tree     import build_timetable_tree_from_file
 from reader.exam_tree        import build_exam_tree_from_timetable_tree
 from reader.verify_timetable import _find_clashes
-from reader.exam_paper       import ExamPaperRegistry
+from reader.exam_paper       import ExamPaper, ExamPaperRegistry
 from reader.exam_scheduler   import (build_schedule, DEFAULT_START_DATE,
-                                     DEFAULT_TOTAL_DAYS)
+                                     DEFAULT_TOTAL_DAYS, SESSIONS, EXAM_WEEKDAYS,
+                                     _exam_dates)
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -131,6 +132,8 @@ class TimePyBlingApp(tk.Tk):
         self.teacher_subj_map = {}
         self.exclusions       = set(DEFAULT_EXCLUSIONS)
         self._selected_paper_label = None   # label of paper selected in paper panel
+        self._sessions        = None        # None = use start/end entries; set = custom list
+        self.session_count_label = None     # set in _build_exam_tab
 
         self._build_ui()
 
@@ -344,6 +347,16 @@ class TimePyBlingApp(tk.Tk):
                   bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 8), padx=6
                   ).pack(side=tk.LEFT, padx=4)
+        tk.Button(paper_btn_row, text="📌 Pin…",
+                  command=self._pin_paper,
+                  bg="#8e44ad", fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 8), padx=6
+                  ).pack(side=tk.LEFT)
+        tk.Button(paper_btn_row, text="Unpin",
+                  command=self._unpin_paper,
+                  bg="#888", fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 8), padx=6
+                  ).pack(side=tk.LEFT, padx=4)
 
         constr_row = tk.Frame(self.paper_lf, bg=CLR_WHITE)
         constr_row.pack(fill=tk.X)
@@ -409,29 +422,51 @@ class TimePyBlingApp(tk.Tk):
         ctrl = tk.Frame(sched_lf, bg=CLR_WHITE)
         ctrl.pack(fill=tk.X, pady=(0, 4))
 
-        tk.Label(ctrl, text="Total days:", bg=CLR_WHITE,
+        # Row 0: Start / End date entries + live slot count
+        tk.Label(ctrl, text="Start:", bg=CLR_WHITE,
                  font=("Helvetica", 9)).grid(row=0, column=0, sticky=tk.W)
-        self.sched_days_var = tk.StringVar(value=str(DEFAULT_TOTAL_DAYS))
-        tk.Entry(ctrl, textvariable=self.sched_days_var,
-                 font=("Helvetica", 9), relief=tk.SOLID, bd=1,
-                 width=5).grid(row=0, column=1, sticky=tk.W, padx=(4, 12))
-
-        tk.Label(ctrl, text="Start date:", bg=CLR_WHITE,
-                 font=("Helvetica", 9)).grid(row=0, column=2, sticky=tk.W)
         self.sched_start_var = tk.StringVar(
             value=DEFAULT_START_DATE.strftime("%Y-%m-%d"))
-        tk.Entry(ctrl, textvariable=self.sched_start_var,
-                 font=("Helvetica", 9), relief=tk.SOLID, bd=1,
-                 width=11).grid(row=0, column=3, sticky=tk.W, padx=(4, 12))
+        self._start_entry = tk.Entry(ctrl, textvariable=self.sched_start_var,
+                                      font=("Helvetica", 9), relief=tk.SOLID,
+                                      bd=1, width=11)
+        self._start_entry.grid(row=0, column=1, sticky=tk.W, padx=(2, 8))
+        self._start_entry.bind("<FocusOut>", lambda e: self._update_session_count_label())
+        self._start_entry.bind("<Return>",   lambda e: self._update_session_count_label())
 
+        _default_end = _exam_dates(DEFAULT_START_DATE, DEFAULT_TOTAL_DAYS)[-1]
+        tk.Label(ctrl, text="End:", bg=CLR_WHITE,
+                 font=("Helvetica", 9)).grid(row=0, column=2, sticky=tk.W)
+        self.sched_end_var = tk.StringVar(
+            value=_default_end.strftime("%Y-%m-%d"))
+        self._end_entry = tk.Entry(ctrl, textvariable=self.sched_end_var,
+                                    font=("Helvetica", 9), relief=tk.SOLID,
+                                    bd=1, width=11)
+        self._end_entry.grid(row=0, column=3, sticky=tk.W, padx=(2, 8))
+        self._end_entry.bind("<FocusOut>", lambda e: self._on_session_dates_changed())
+        self._end_entry.bind("<Return>",   lambda e: self._on_session_dates_changed())
+
+        self.session_count_label = tk.Label(ctrl, text="", bg=CLR_WHITE,
+                                             fg=CLR_BLUE,
+                                             font=("Helvetica", 9, "bold"))
+        self.session_count_label.grid(row=0, column=4, sticky=tk.W, padx=(0, 4))
+
+        # Row 1: Configure sessions button
+        tk.Button(ctrl, text="Configure sessions…",
+                  command=self._open_session_calendar,
+                  bg=CLR_LIGHT, font=("Helvetica", 8),
+                  relief=tk.FLAT, padx=8
+                  ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
+
+        # Row 2: Grade filter + Generate
         tk.Label(ctrl, text="Grade:", bg=CLR_WHITE,
-                 font=("Helvetica", 9)).grid(row=1, column=0, sticky=tk.W,
+                 font=("Helvetica", 9)).grid(row=2, column=0, sticky=tk.W,
                                               pady=(4, 0))
         self.sched_grade_var = tk.StringVar()
         self.sched_grade_cb  = ttk.Combobox(
             ctrl, textvariable=self.sched_grade_var,
             state="readonly", width=10, font=("Helvetica", 9))
-        self.sched_grade_cb.grid(row=1, column=1, columnspan=2, sticky=tk.W,
+        self.sched_grade_cb.grid(row=2, column=1, columnspan=2, sticky=tk.W,
                                   padx=(4, 12), pady=(4, 0))
         self.sched_grade_cb.bind("<<ComboboxSelected>>",
                                   lambda e: self._render_schedule())
@@ -440,13 +475,16 @@ class TimePyBlingApp(tk.Tk):
                   command=self._generate_exam_schedule,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 9, "bold"), padx=10, pady=3
-                  ).grid(row=1, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
+                  ).grid(row=2, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
 
         tk.Button(ctrl, text="Export / View All",
                   command=self._open_schedule_popout,
                   bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 9, "bold"), padx=10, pady=3
-                  ).grid(row=2, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
+                  ).grid(row=3, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
+
+        # Initialise the slot count label
+        self._update_session_count_label()
 
         # Schedule output
         self.sched_text = _scrolled_text(sched_lf)
@@ -744,14 +782,18 @@ class TimePyBlingApp(tk.Tk):
         self._set_constraint_ui_enabled(True)
         if not subject or not grade or not self.paper_registry:
             return
-        papers = self.paper_registry.papers_for_subject_grade(subject, grade)
+        papers     = self.paper_registry.papers_for_subject_grade(subject, grade)
+        pin_clashes = (self.schedule_result.pin_clash_warnings
+                       if self.schedule_result else {})
         for p in papers:
-            constr_str = (", ".join(sorted(p.constraints))
-                          if p.constraints else "no constraints")
+            constr_str    = (", ".join(sorted(p.constraints))
+                             if p.constraints else "no constraints")
+            pin_indicator = "📌 " if p.pinned_slot is not None else "   "
+            clash_flag    = "  ⚠ pin clash" if p.label in pin_clashes else ""
             self.paper_listbox.insert(
                 tk.END,
-                f"{p.subject} P{p.paper_number} — {p.student_count()} students"
-                f" — {constr_str}"
+                f"{pin_indicator}{p.subject} P{p.paper_number}"
+                f" — {p.student_count()} students — {constr_str}{clash_flag}"
             )
         if papers:
             self.paper_listbox.selection_set(0)
@@ -944,26 +986,19 @@ class TimePyBlingApp(tk.Tk):
         if not self.paper_registry:
             messagebox.showinfo("No data", "Load a timetable first.")
             return
-        try:
-            total_days = int(self.sched_days_var.get().strip())
-            if total_days < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Invalid days",
-                                  "Enter a positive integer for total days.")
+        sessions = self._get_effective_sessions()
+        if sessions is None:
+            messagebox.showerror("Invalid dates",
+                                  "Enter valid start and end dates (YYYY-MM-DD).")
             return
-        try:
-            start_date = date.fromisoformat(self.sched_start_var.get().strip())
-        except ValueError:
-            messagebox.showerror("Invalid date",
-                                  "Enter start date as YYYY-MM-DD  "
-                                  "e.g. 2026-10-05")
+        if not sessions:
+            messagebox.showerror("No sessions",
+                                  "No exam sessions in the selected date range.")
             return
-
         self.schedule_result = build_schedule(
-            registry   = self.paper_registry,
-            total_days = total_days,
-            start_date = start_date,
+            registry  = self.paper_registry,
+            sessions  = sessions,
+            exam_tree = self.exam_tree,
         )
         self._render_schedule()
 
@@ -1006,10 +1041,11 @@ class TimePyBlingApp(tk.Tk):
             prev_date = sp.date
 
             date_str  = sp.date.strftime("%a %d %b")
+            pin_mark  = " 📌" if sp.pinned else ""
             warn_flag = "  ⚠" if sp.warnings else ""
             line = (f"  {date_str:<14} {sp.session:<5} "
                     f"{sp.paper.label:<22} "
-                    f"{sp.paper.student_count():>8}{warn_flag}\n")
+                    f"{sp.paper.student_count():>8}{pin_mark}{warn_flag}\n")
             tag = "am" if sp.session == "AM" else "pm"
             _write(w, line, tag)
 
@@ -1028,6 +1064,232 @@ class TimePyBlingApp(tk.Tk):
             _write(w, "\nWarnings:\n", "warn")
             for msg in unique_warnings:
                 _write(w, f"  ⚠  {msg}\n", "warn")
+
+        if self.schedule_result and self.schedule_result.teacher_warnings:
+            _write(w, "\nTeacher marking load conflicts:\n", "warn")
+            for msg in self.schedule_result.teacher_warnings:
+                _write(w, f"  ⚠  {msg}\n", "warn")
+
+    # ─────────────────────────────────────────────────────────
+    # SESSION CALENDAR
+    # ─────────────────────────────────────────────────────────
+
+    def _get_effective_sessions(self) -> list[tuple[date, str]] | None:
+        """
+        Return the active session list.
+        If self._sessions is set (from popup), return it directly.
+        Otherwise compute from start/end date entries.
+        Returns None if dates are invalid.
+        """
+        if self._sessions is not None:
+            return self._sessions
+        try:
+            start = date.fromisoformat(self.sched_start_var.get().strip())
+            end   = date.fromisoformat(self.sched_end_var.get().strip())
+        except ValueError:
+            return None
+        if end < start:
+            return None
+        days: list[date] = []
+        d = start
+        while d <= end:
+            if d.weekday() in EXAM_WEEKDAYS:
+                days.append(d)
+            d += timedelta(days=1)
+        return [(day, sess) for day in days for sess in SESSIONS]
+
+    def _update_session_count_label(self):
+        if self.session_count_label is None:
+            return
+        sessions = self._get_effective_sessions()
+        if sessions is None:
+            self.session_count_label.config(text="invalid dates", fg=CLR_RED)
+            return
+        n_days  = len({d for d, _ in sessions})
+        n_slots = len(sessions)
+        custom  = self._sessions is not None
+        txt = f"{n_days} days  →  {n_slots} slots"
+        if custom:
+            txt += "  (custom)"
+        self.session_count_label.config(
+            text=txt,
+            fg="#8e44ad" if custom else CLR_BLUE
+        )
+
+    def _on_session_dates_changed(self):
+        """Called when start or end date entry loses focus — reset custom sessions."""
+        self._sessions = None
+        self._update_session_count_label()
+
+    def _open_session_calendar(self):
+        """Open a popup to toggle individual AM/PM sessions on or off."""
+        sessions = self._get_effective_sessions()
+        if not sessions:
+            messagebox.showerror("Invalid dates",
+                                  "Enter valid start and end dates first.")
+            return
+
+        # Build day → {AM: bool, PM: bool} map from current effective sessions
+        day_state: dict[date, dict[str, bool]] = {}
+        for d, s in sessions:
+            day_state.setdefault(d, {"AM": False, "PM": False})
+            day_state[d][s] = True
+        # If we have custom sessions, mark unchecked slots too
+        if self._sessions is not None:
+            for d in day_state:
+                for s in SESSIONS:
+                    if (d, s) not in {(ds, ss) for ds, ss in self._sessions}:
+                        day_state[d][s] = False
+
+        top = tk.Toplevel(self)
+        top.title("Configure Exam Sessions")
+        top.geometry("360x480")
+        top.configure(bg=CLR_WHITE)
+
+        tk.Label(top, text="Toggle AM/PM sessions on or off:",
+                 bg=CLR_WHITE, font=("Helvetica", 10, "bold")
+                 ).pack(pady=(10, 4), padx=10, anchor=tk.W)
+
+        cf = tk.Frame(top, bg=CLR_WHITE)
+        cf.pack(fill=tk.BOTH, expand=True, padx=10)
+        canvas = tk.Canvas(cf, bg=CLR_WHITE, highlightthickness=0)
+        v_sb   = ttk.Scrollbar(cf, orient=tk.VERTICAL, command=canvas.yview)
+        v_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas.configure(yscrollcommand=v_sb.set)
+        inner = tk.Frame(canvas, bg=CLR_WHITE)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        session_vars: dict[tuple[date, str], tk.BooleanVar] = {}
+        for i, (d, state) in enumerate(sorted(day_state.items())):
+            bg  = CLR_MORNING if i % 2 == 0 else CLR_WHITE
+            row = tk.Frame(inner, bg=bg)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=d.strftime("%a %d %b"), bg=bg,
+                     font=("Courier", 9), width=14, anchor=tk.W
+                     ).pack(side=tk.LEFT, padx=(4, 8))
+            for sess in SESSIONS:
+                v = tk.BooleanVar(value=state.get(sess, True))
+                session_vars[(d, sess)] = v
+                tk.Checkbutton(row, text=sess, variable=v,
+                               bg=bg, font=("Helvetica", 9)
+                               ).pack(side=tk.LEFT, padx=2)
+
+        inner.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+        btn_frame = tk.Frame(top, bg=CLR_WHITE, pady=8)
+        btn_frame.pack(fill=tk.X, padx=10)
+
+        def _apply():
+            new_sessions = [
+                (d, s)
+                for (d, s), v in sorted(session_vars.items())
+                if v.get()
+            ]
+            if not new_sessions:
+                messagebox.showwarning("No sessions",
+                                       "At least one session must be enabled.",
+                                       parent=top)
+                return
+            self._sessions = new_sessions
+            self._update_session_count_label()
+            top.destroy()
+
+        def _reset_all():
+            for v in session_vars.values():
+                v.set(True)
+
+        tk.Button(btn_frame, text="Apply", command=_apply,
+                  bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 9, "bold"), padx=16, pady=4
+                  ).pack(side=tk.LEFT)
+        tk.Button(btn_frame, text="Cancel", command=top.destroy,
+                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  relief=tk.FLAT, padx=10, pady=4
+                  ).pack(side=tk.LEFT, padx=8)
+        tk.Button(btn_frame, text="Reset to all on", command=_reset_all,
+                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  relief=tk.FLAT, padx=10, pady=4
+                  ).pack(side=tk.LEFT)
+
+    # ─────────────────────────────────────────────────────────
+    # SLOT PINNING
+    # ─────────────────────────────────────────────────────────
+
+    def _pin_paper(self):
+        if not self.paper_registry or not self._selected_paper_label:
+            return
+        paper = self.paper_registry.get(self._selected_paper_label)
+        if not paper:
+            return
+        sessions = self._get_effective_sessions()
+        if not sessions:
+            messagebox.showinfo("No sessions",
+                                "Configure exam sessions (start/end dates) first.")
+            return
+        self._open_slot_picker(paper, sessions)
+
+    def _unpin_paper(self):
+        if not self.paper_registry or not self._selected_paper_label:
+            return
+        paper = self.paper_registry.get(self._selected_paper_label)
+        if paper and paper.pinned_slot is not None:
+            paper.pinned_slot = None
+            subject, grade = self._current_subject_grade()
+            self._refresh_paper_panel(subject, grade)
+
+    def _open_slot_picker(self, paper: ExamPaper,
+                           sessions: list[tuple[date, str]]):
+        top = tk.Toplevel(self)
+        top.title(f"Pin {paper.label} to slot")
+        top.geometry("310x420")
+        top.configure(bg=CLR_WHITE)
+
+        tk.Label(top, text=f"Select a slot for  {paper.label}:",
+                 bg=CLR_WHITE, font=("Helvetica", 10, "bold")
+                 ).pack(pady=(10, 4), padx=10, anchor=tk.W)
+
+        lb_frame = tk.Frame(top, bg=CLR_WHITE)
+        lb_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+        lb_sb = ttk.Scrollbar(lb_frame, orient=tk.VERTICAL)
+        lb_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        lb = tk.Listbox(lb_frame, font=("Courier", 9), relief=tk.SOLID, bd=1,
+                        selectmode=tk.SINGLE, yscrollcommand=lb_sb.set)
+        lb_sb.config(command=lb.yview)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        for i, (d, sess) in enumerate(sessions):
+            marker = "  📌" if paper.pinned_slot == i else ""
+            bg     = CLR_MORNING if sess == "AM" else CLR_AFTERNOON
+            lb.insert(tk.END,
+                      f"Slot {i + 1:>3}  {d.strftime('%a %d %b')}  {sess}{marker}")
+            lb.itemconfig(i, background=bg)
+
+        if paper.pinned_slot is not None and paper.pinned_slot < len(sessions):
+            lb.selection_set(paper.pinned_slot)
+            lb.see(paper.pinned_slot)
+
+        btn_frame = tk.Frame(top, bg=CLR_WHITE, pady=8)
+        btn_frame.pack(fill=tk.X, padx=10)
+
+        def _pin():
+            sel = lb.curselection()
+            if not sel:
+                return
+            paper.pinned_slot = sel[0]
+            subject, grade = self._current_subject_grade()
+            self._refresh_paper_panel(subject, grade)
+            top.destroy()
+
+        tk.Button(btn_frame, text="Pin to slot", command=_pin,
+                  bg="#8e44ad", fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 9, "bold"), padx=16, pady=4
+                  ).pack(side=tk.LEFT)
+        tk.Button(btn_frame, text="Cancel", command=top.destroy,
+                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  relief=tk.FLAT, padx=10, pady=4
+                  ).pack(side=tk.LEFT, padx=8)
 
     # ─────────────────────────────────────────────────────────
     # SCHEDULE POPOUT  (Task 3)

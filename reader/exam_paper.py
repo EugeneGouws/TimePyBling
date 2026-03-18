@@ -7,6 +7,7 @@ ExamPaperRegistry — holds all papers, built from an ExamTree.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
+from typing import Optional
 from reader.exam_tree import ExamTree
 
 
@@ -17,6 +18,7 @@ class ExamPaper:
     paper_number : int        # 1, 2, or 3
     student_ids  : set[int] = field(default_factory=set)
     constraints  : set[str] = field(default_factory=set)
+    pinned_slot  : Optional[int] = None   # slot index, None = free
 
     @property
     def label(self) -> str:

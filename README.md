@@ -1,109 +1,145 @@
 # TimePyBling
 
-School timetable analysis tool. Reads a completed student timetable, checks it for clashes, scores it against a cost function, and schedules exams.
+A desktop tool for South African school timetable analysis and exam scheduling. Reads a completed student timetable from Excel, checks it for double-bookings, and builds a dated cross-grade exam timetable with clash-free placement.
 
 ## Requirements
 
 - Python 3.13
-- `pip install pandas openpyxl`
+- `pip install pandas openpyxl reportlab`
 
-## Data files
-
-Place these in the `data/` folder before running:
-
-| File | Description |
-|---|---|
-| `data/ST1.xlsx` | Student timetable — one row per student, columns A1–H7 |
-| `data/teachers.xlsx` | Teacher codes and subject pools |
-
-ST1 cell format: `SUBJECT TEACHERCODE` e.g. `AF BALAY`. Empty slots can be left blank or filled with `FREE`.
-
-## Running
+## Quick start
 
 ```
 python main.py
 ```
 
-This launches the UI. Load files using the buttons in the top bar.
+Place your data files in `data/` before launching:
+
+| File | Description |
+|---|---|
+| `data/ST12026.xlsx` | Student timetable — one row per student, columns A1–H7 |
+| `data/teachers.xlsx` | Teacher codes and subject pools (optional) |
+
+Each timetable cell contains `SUBJECT TEACHERCODE`, e.g. `AF BALAY`.
+
+---
+
+## The four tabs
+
+### Timetable
+
+Browse the loaded timetable as a tree: Block → SubBlock → Class → Students. A live search box filters by student ID or class label anywhere in the tree.
+
+### Verification
+
+Two checks run against the loaded timetable:
+
+- **Student double-bookings** — any student appearing in two classes in the same subblock.
+- **Teacher qualification check** — flags teachers assigned to subjects outside their declared subject pool (requires `teachers.xlsx`).
+
+### Exams
+
+Build a dated exam timetable across all grades in one pass.
+
+**Setting up papers**
+
+The exam tree shows every grade and subject found in the timetable. Each subject starts with one paper (P1). You can:
+
+- Select subjects and add a P2 or P3 paper (up to three papers per subject per grade).
+- Tag any paper with a constraint code (e.g. a venue code like `C6`). Papers sharing a constraint code cannot be placed in the same slot, even across grades with no shared students.
+
+Subjects excluded by default: ST, LIB, PE, RDI.
+
+**Generating the schedule**
+
+Set the total number of exam days and a start date, then click Generate. The scheduler places all papers — all grades, all papers — in a single cross-grade pass.
+
+**Viewing and exporting**
+
+A popout window shows the full cross-grade schedule. Filter by grade or view all grades together. Export to PDF or plain text.
+
+### Export
+
+Write the optimised timetable back to ST1.xlsx. (Simulated annealing optimiser pending.)
+
+---
+
+## Scheduling algorithm
+
+All papers across all grades are scheduled simultaneously. Grade-by-grade scheduling is not used because constraint codes create hard clashes between grades even when no students overlap.
+
+**Step 1 — Priority placement (MA and PH)**
+
+Maths and Physical Science papers are placed first, from Gr12 down. For each paper the algorithm picks the valid slot that maximises the gap to other papers of the same subject within the same grade (e.g. MA P1 and MA P2 for Gr12 are spread as far apart as possible).
+
+**Step 2 — DSatur for remaining papers**
+
+Remaining papers are sorted by student count (largest first), then placed using the DSatur graph-colouring heuristic. Papers with more neighbours in the clash graph are assigned first; ties are broken by student count then grade.
+
+**Step 3 — Spacing pass**
+
+After initial placement the algorithm checks whether any same-subject, same-grade papers landed in the same calendar week. Non-priority papers are swapped to a better slot if one exists with no new clashes. Remaining same-week pairs are flagged as warnings in the output.
+
+**Hell week diagnostic**
+
+Any grade where a student has four or more exams in one week is flagged in the output.
+
+**Slots**
+
+Two sessions per day (AM / PM). Weekends are skipped. Slot 0 = Day 1 AM, Slot 1 = Day 1 PM, Slot 2 = Day 2 AM, and so on.
+
+---
 
 ## Project structure
 
 ```
 TimePyBling/
-├── main.py                    # Entry point — launches the UI
+├── main.py
 ├── data/
-│   ├── ST1.xlsx
-│   └── teachers.xlsx
 ├── core/
-│   ├── timetable_tree.py      # Parse ST1.xlsx → TimetableTree (read-only)
-│   ├── block_tree.py          # Mutable BlockTree for SA moves
-│   └── conflict_matrix.py     # Pure shared-student conflict utility
-├── reader/
+│   ├── timetable_tree.py      # Parse ST1.xlsx → TimetableTree
+│   ├── block_tree.py          # Mutable BlockTree (SA optimiser, pending)
+│   ├── conflict_matrix.py     # Shared-student conflict utility
+│   └── timetable_converter.py # TimetableTree → BlockTree
+└── reader/
 │   ├── exam_tree.py           # Reorganise TimetableTree by grade + subject
-│   ├── exam_clash.py          # DSatur exam slot scheduling
-│   └── verify_timetable.py    # Detect student and teacher double-bookings
-├── optimizer/
-│   ├── cost_function.py       # E(T) cost evaluator
-│   └── block_exporter.py      # BlockTree → ST1.xlsx output
+│   ├── exam_paper.py          # ExamPaper model and ExamPaperRegistry
+│   ├── exam_clash.py          # Clash graph — student clashes + constraint clashes
+│   ├── exam_scheduler.py      # Cross-grade priority scheduler → ScheduleResult
+│   └── verify_timetable.py    # Student double-booking detection
 └── ui/
-    └── ui.py                  # tkinter interface
+    └── ui.py                  # Tkinter interface (4 tabs)
 ```
 
-## UI tabs
+### Key data models
 
-**Timetable** — browse the full timetable tree (Block → SubBlock → Class → Students). Live search by student ID, subject code, or teacher name.
+| Class | Module | Role |
+|---|---|---|
+| `TimetableTree` | `core/timetable_tree.py` | Block → SubBlock → ClassList → StudentList |
+| `ExamTree` | `reader/exam_tree.py` | GradeNode → ExamSubject → ClassList |
+| `ExamPaper` | `reader/exam_paper.py` | One schedulable exam event (subject + paper number + grade) |
+| `ExamPaperRegistry` | `reader/exam_paper.py` | All papers; add/remove P2/P3; constraint codes |
+| `ScheduleResult` | `reader/exam_scheduler.py` | Dated slot assignments + warnings |
 
-**Verification** — loads automatically on file open. Shows:
-- Clash report: student and teacher double-bookings
-- Cost function E(T): per-term breakdown
-- Teacher qualifications: cross-checks teacher assignments against their subject pool in teachers.xlsx
+### Label formats
 
-**Exams** — exam slot scheduling by grade using DSatur graph colouring. Manage subject exclusions (ST, LIB, PE, RDI excluded by default). Rebuild as needed.
+**Class labels** follow `SUBJECT_TEACHERCODE_GRADE` — e.g. `AF_BALAY_08`, `MA_ALLEN_10`. Grade is zero-padded. `OD` merges to `DR` at parse time.
 
-**Export** — write the timetable back to ST1.xlsx. Requires `timetable_converter.py` (not yet written — see below).
+**Paper labels** follow `SUBJECT_P{n}_GRADE` — e.g. `MA_P1_Gr12`, `EN_P2_Gr10`.
 
-## Cost function E(T)
-
-| Term | Description                                    | Weight |
-|---|------------------------------------------------|---|
-| C_s | Student double-bookings                        | 10 000 |
-| C_t | Teacher double-bookings                        | 5 000 |
-| P_g12 | Gr 12 class taught by non-preferred teacher    | 400 |
-| P_tg | Teacher assigned outside preferred grades      | 100 |
-| P_f | Teacher has no free on a specific day          | 50 |
-| P_stg | Sparse subject group on consecutive cycle days | 10 |
-| P_alloc | Allocation rules Gr 9–11                       | 5 |
-
-P_g12, P_tg, P_f, and P_alloc are stubs — they return 0 until the relevant optional columns are added to teachers.xlsx.
-
-## teachers.xlsx format
-
-Required columns:
+### teachers.xlsx columns
 
 | Column | Description |
 |---|---|
-| `Teacher Code` | Code used in ST1 cells e.g. `BALAY` |
+| `Teacher Code` | Code used in ST1 cells, e.g. `BALAY` |
 | `sua` | Primary subject code |
 | `sub` | Secondary subject code (optional) |
 | `suc` | Tertiary subject code (optional) |
 
-Optional columns to activate preference terms:
+---
 
-| Column | Description                                           |
-|---|-------------------------------------------------------|
-| `gr12` | Each Gr 12 learner gets to choose one subject teacher |
-| `pref_grades` | Comma-separated e.g. `10,11,12`                       |
+## Backlog
 
-## What is not yet built
-
-`timetable_converter.py` — converts a TimetableTree into a BlockTree so the export and SA optimiser can run. This is the next piece to write. Once it exists, the Export tab and the simulated annealing optimiser can be wired up.
-
-## Class label format
-
-All class labels follow `SUBJECT_TEACHERCODE_GRADE`:
-
-- `AF_BALAY_08` — subject AF, teacher BALAY, grade 8
-- `MA_ALLEN_10` — subject MA, teacher ALLEN, grade 10
-- `DR_VAN_DEN_BERG_12` — teacher codes with underscores are handled correctly
-
-Grade is always zero-padded to two digits. The subject merge `OD → DR` is applied at parse time in `timetable_tree.py`.
+- Inline paper/constraint controls in the exam tree (currently in bottom panel)
+- Simulated annealing timetable optimiser
+- Per-student printable exam timetable
