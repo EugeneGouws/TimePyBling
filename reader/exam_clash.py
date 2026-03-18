@@ -306,6 +306,41 @@ def print_clash_report(exam_tree: ExamTree, exclusions: set = None):
 
 
 # ------------------------------------------------
+# PAPER-LEVEL CLASH GRAPH  (cross-grade, all papers)
+# ------------------------------------------------
+def build_paper_clash_graph(papers) -> dict[str, set[str]]:
+    """
+    Build a clash adjacency dict for a flat list of ExamPaper objects.
+
+    Two papers clash if they share:
+        - at least one student ID  (student clash), OR
+        - at least one constraint code  (constraint clash)
+
+    Parameters
+    ----------
+    papers : iterable of ExamPaper
+
+    Returns
+    -------
+    dict[label -> set[label]]  — symmetric adjacency; self-loops excluded
+    """
+    paper_list = list(papers)
+    graph: dict[str, set[str]] = {p.label: set() for p in paper_list}
+
+    for i in range(len(paper_list)):
+        for j in range(i + 1, len(paper_list)):
+            a, b = paper_list[i], paper_list[j]
+            student_clash    = not a.student_ids.isdisjoint(b.student_ids)
+            constraint_clash = (bool(a.constraints) and bool(b.constraints)
+                                and not a.constraints.isdisjoint(b.constraints))
+            if student_clash or constraint_clash:
+                graph[a.label].add(b.label)
+                graph[b.label].add(a.label)
+
+    return graph
+
+
+# ------------------------------------------------
 # OPTIONAL TEST NOTE
 # ------------------------------------------------
 if __name__ == "__main__":
