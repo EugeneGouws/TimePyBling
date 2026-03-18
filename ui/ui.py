@@ -4,24 +4,27 @@ ui.py — TimePyBling main interface
 Tabs
 ----
   Timetable    — browse Block → SubBlock → Class → Students, with live search
-  Verification — clash report, teacher qualification check, cost breakdown
+  Verification — clash report, data integrity, schedulable pairs
   Exams        — exam slot scheduling + dated exam timetable per grade
   Export       — write optimised ST1.xlsx
 """
 
+import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from datetime import date, timedelta
+from collections import defaultdict
 import pandas as pd
 
 from core.timetable_tree     import build_timetable_tree_from_file
+from core.conflict_matrix    import ConflictMatrix
 from reader.exam_tree        import build_exam_tree_from_timetable_tree
 from reader.verify_timetable import _find_clashes
 from reader.exam_paper       import ExamPaper, ExamPaperRegistry
-from reader.exam_scheduler   import (build_schedule, DEFAULT_START_DATE,
-                                     DEFAULT_TOTAL_DAYS, SESSIONS, EXAM_WEEKDAYS,
-                                     _exam_dates)
+from reader.exam_scheduler   import (build_schedule, SESSIONS, EXAM_WEEKDAYS)
+from reader.exam_clash       import (build_clash_graph, dsatur_colouring,
+                                     is_excluded as _is_subject_excluded)
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -29,6 +32,9 @@ from reader.exam_scheduler   import (build_schedule, DEFAULT_START_DATE,
 
 DEFAULT_EXCLUSIONS   = {"ST", "LIB", "PE", "RDI"}
 TEACHER_SUBJECT_COLS = ["sua", "sub", "suc"]
+
+DEFAULT_EXAM_START = date(2026, 6, 1)
+DEFAULT_EXAM_END   = date(2026, 6, 23)
 
 CLR_HEADER   = "#2c3e50"
 CLR_GREEN    = "#27ae60"
@@ -38,8 +44,8 @@ CLR_LIGHT    = "#ecf0f1"
 CLR_MID      = "#bdc3c7"
 CLR_WHITE    = "white"
 CLR_BG       = "#f5f5f5"
-CLR_MORNING  = "#e8f5e9"   # light green tint for morning rows
-CLR_AFTERNOON= "#fff8e1"   # light amber tint for afternoon rows
+CLR_MORNING  = "#e8f5e9"
+CLR_AFTERNOON= "#fff8e1"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -104,11 +110,29 @@ def _extract_teacher_subjects_from_tree(tree) -> dict[str, set[str]]:
 
 
 def _strip_grade(label: str) -> str:
-    """
-    Strip the grade suffix for compact display in the schedule.
-    "EN_12" -> "EN",  "CAT_12" -> "CAT"
-    """
     return label.split("_")[0]
+
+
+def _data_integrity_issues(tree) -> list[dict]:
+    """Find class labels with fewer than 5 students across all subblocks."""
+    class_info: dict[str, dict] = defaultdict(
+        lambda: {"students": set(), "subblocks": set()})
+    for block in tree.blocks.values():
+        for sb_name, subblock in block.subblocks.items():
+            for label, cl in subblock.class_lists.items():
+                class_info[label]["students"] |= cl.student_list.students
+                class_info[label]["subblocks"].add(sb_name)
+    issues = []
+    for label, info in sorted(class_info.items()):
+        if len(info["students"]) < 5:
+            issues.append({
+                "label":    label,
+                "count":    len(info["students"]),
+                "subblocks": sorted(info["subblocks"],
+                                    key=lambda x: (x[0], int(x[1:]))),
+                "students": sorted(info["students"]),
+            })
+    return issues
 
 
 # ─────────────────────────────────────────────────────────────
@@ -123,19 +147,42 @@ class TimePyBlingApp(tk.Tk):
         self.geometry("1200x800")
         self.configure(bg=CLR_BG)
 
-        self.timetable_tree   = None
-        self.exam_tree        = None
-        self.paper_registry   = None   # ExamPaperRegistry
-        self.schedule_result  = None   # ScheduleResult
-        self.st1_path         = None
-        self.teachers_path    = None
-        self.teacher_subj_map = {}
-        self.exclusions       = set(DEFAULT_EXCLUSIONS)
-        self._selected_paper_label = None   # label of paper selected in paper panel
-        self._sessions        = None        # None = use start/end entries; set = custom list
-        self.session_count_label = None     # set in _build_exam_tab
+        self.timetable_tree        = None
+        self.exam_tree             = None
+        self.paper_registry        = None
+        self.schedule_result       = None
+        self.st1_path              = None
+        self.teachers_path         = None
+        self.teacher_subj_map      = {}
+        self.exclusions            = set(DEFAULT_EXCLUSIONS)
+        self._selected_paper_label = None
+        self._sessions             = None
+        self.session_count_label   = None
+
+        # AM / PM session toggles (BUG 6)
+        self._am_var = tk.BooleanVar(value=True)
+        self._pm_var = tk.BooleanVar(value=True)
 
         self._build_ui()
+        self.after(300, self._auto_load)   # BUG 1
+
+    # ─────────────────────────────────────────────────────────
+    # AUTO-LOAD  (BUG 1)
+    # ─────────────────────────────────────────────────────────
+
+    def _auto_load(self):
+        candidates = [
+            r"E:\TimePyBling\data\ST12026.xlsx",
+            "data/ST1 2026.xlsx",
+            "data/ST12026.xlsx",
+            "data/ST1_2026.xlsx",
+            "data/ST1.xlsx",
+        ]
+        for c in candidates:
+            p = Path(c)
+            if p.exists():
+                self._load_st1_path(p)
+                return
 
     # ─────────────────────────────────────────────────────────
     # BUILD UI
@@ -170,14 +217,7 @@ class TimePyBlingApp(tk.Tk):
                                         bg=CLR_HEADER, fg=CLR_MID,
                                         font=("Helvetica", 9))
         self.teachers_label.pack(side=tk.LEFT, padx=(6, 20))
-
-        tk.Button(bar, text="Load Students", state=tk.DISABLED,
-                  bg="#555", fg=CLR_MID, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10, pady=3).pack(side=tk.LEFT)
-
-        tk.Label(bar, text="Coming soon",
-                 bg=CLR_HEADER, fg="#666",
-                 font=("Helvetica", 9, "italic")).pack(side=tk.LEFT, padx=(6, 0))
+        # "Load Students — Coming soon" removed (REMOVE)
 
     def _build_notebook(self):
         self.notebook = ttk.Notebook(self)
@@ -237,7 +277,7 @@ class TimePyBlingApp(tk.Tk):
         self._style_tree(self.tt_tree)
 
     # ─────────────────────────────────────────────────────────
-    # TAB 2 — VERIFICATION
+    # TAB 2 — VERIFICATION  (BUG 2 + BUG 3)
     # ─────────────────────────────────────────────────────────
 
     def _build_verification_tab(self):
@@ -245,21 +285,21 @@ class TimePyBlingApp(tk.Tk):
                               bg="#ccc", sashwidth=5)
         pane.pack(fill=tk.BOTH, expand=True)
 
-        # Left: clash report
+        # Left: Clashes + Schedulable Pairs
         left = tk.Frame(pane, bg=CLR_WHITE)
         pane.add(left, minsize=520)
 
-        clash_hdr = tk.Frame(left, bg=CLR_WHITE)
-        clash_hdr.pack(fill=tk.X, padx=8, pady=(8, 2))
-        tk.Label(clash_hdr, text="Clash Report", bg=CLR_WHITE,
+        hdr = tk.Frame(left, bg=CLR_WHITE)
+        hdr.pack(fill=tk.X, padx=8, pady=(8, 2))
+        tk.Label(hdr, text="Clashes  &  Schedulable Pairs", bg=CLR_WHITE,
                  font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
-        tk.Button(clash_hdr, text="Re-run", command=self._run_verification,
+        tk.Button(hdr, text="Re-run", command=self._run_verification,
                   bg=CLR_LIGHT, font=("Helvetica", 8),
                   relief=tk.FLAT, padx=8).pack(side=tk.RIGHT)
 
-        clash_frame = tk.Frame(left, bg=CLR_WHITE)
-        clash_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-        self.clash_report = _scrolled_text(clash_frame)
+        report_frame = tk.Frame(left, bg=CLR_WHITE)
+        report_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self.clash_report = _scrolled_text(report_frame)
         self.clash_report.tag_config("pass",    foreground=CLR_GREEN)
         self.clash_report.tag_config("fail",    foreground=CLR_RED)
         self.clash_report.tag_config("heading", foreground="#333",
@@ -267,29 +307,26 @@ class TimePyBlingApp(tk.Tk):
         self.clash_report.tag_config("warn",    foreground="#e67e22")
         self.clash_report.tag_config("dim",     foreground="#888")
 
-        # Right: cost + teacher checks
+        # Right: Data Integrity
         right = tk.Frame(pane, bg=CLR_WHITE)
         pane.add(right, minsize=300)
 
-        cost_lf = tk.LabelFrame(right, text="Cost Function  E(T)",
-                                 bg=CLR_WHITE, font=("Helvetica", 10, "bold"),
-                                 padx=6, pady=6)
-        cost_lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
-        self.cost_text = _scrolled_text(cost_lf)
-        self.cost_text.tag_config("good", foreground=CLR_GREEN)
-        self.cost_text.tag_config("bad",  foreground=CLR_RED)
+        di_hdr = tk.Frame(right, bg=CLR_WHITE)
+        di_hdr.pack(fill=tk.X, padx=8, pady=(8, 2))
+        tk.Label(di_hdr, text="Data Integrity", bg=CLR_WHITE,
+                 font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
 
-        qual_lf = tk.LabelFrame(right, text="Teacher Qualifications",
-                                 bg=CLR_WHITE, font=("Helvetica", 10, "bold"),
-                                 padx=6, pady=6)
-        qual_lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
-        self.qual_text = _scrolled_text(qual_lf)
-        self.qual_text.tag_config("ok",   foreground=CLR_GREEN)
-        self.qual_text.tag_config("warn", foreground=CLR_RED)
-        self.qual_text.tag_config("dim",  foreground="#888")
+        di_frame = tk.Frame(right, bg=CLR_WHITE)
+        di_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self.integrity_report = _scrolled_text(di_frame)
+        self.integrity_report.tag_config("pass",    foreground=CLR_GREEN)
+        self.integrity_report.tag_config("heading", foreground="#333",
+                                          font=("Courier", 9, "bold"))
+        self.integrity_report.tag_config("warn",    foreground="#e67e22")
+        self.integrity_report.tag_config("dim",     foreground="#888")
 
     # ─────────────────────────────────────────────────────────
-    # TAB 3 — EXAMS
+    # TAB 3 — EXAMS  (BUG 4 + 5 + 6)
     # ─────────────────────────────────────────────────────────
 
     def _build_exam_tab(self):
@@ -305,10 +342,18 @@ class TimePyBlingApp(tk.Tk):
         left_top.pack(fill=tk.X, padx=6, pady=(6, 0))
         tk.Label(left_top, text="Exam Tree", bg=CLR_WHITE,
                  font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
+
+        # BUG 5: Import / Export buttons
+        tk.Button(left_top, text="Export…", command=self._export_exam_state,
+                  bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=(2, 0))
+        tk.Button(left_top, text="Import…", command=self._import_exam_state,
+                  bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=2)
         tk.Button(left_top, text="Rebuild", command=self._rebuild_exam,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Helvetica", 8, "bold"), padx=8
-                  ).pack(side=tk.RIGHT)
+                  ).pack(side=tk.RIGHT, padx=2)
 
         tree_frame = tk.Frame(left, bg=CLR_WHITE)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(2, 0))
@@ -383,7 +428,7 @@ class TimePyBlingApp(tk.Tk):
                                           selectmode=tk.SINGLE)
         self.constr_listbox.pack(fill=tk.X, pady=(4, 0))
 
-        # ── Right: exclusions + scheduler controls + output ──
+        # ── Right: exclusions + scheduler controls + cost function ──
         right = tk.Frame(pane, bg=CLR_WHITE)
         pane.add(right, minsize=340)
 
@@ -417,7 +462,7 @@ class TimePyBlingApp(tk.Tk):
         sched_lf = tk.LabelFrame(right, text="Exam Schedule",
                                    bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
                                    padx=8, pady=6)
-        sched_lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        sched_lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
 
         ctrl = tk.Frame(sched_lf, bg=CLR_WHITE)
         ctrl.pack(fill=tk.X, pady=(0, 4))
@@ -426,37 +471,44 @@ class TimePyBlingApp(tk.Tk):
         tk.Label(ctrl, text="Start:", bg=CLR_WHITE,
                  font=("Helvetica", 9)).grid(row=0, column=0, sticky=tk.W)
         self.sched_start_var = tk.StringVar(
-            value=DEFAULT_START_DATE.strftime("%Y-%m-%d"))
+            value=DEFAULT_EXAM_START.strftime("%Y-%m-%d"))
         self._start_entry = tk.Entry(ctrl, textvariable=self.sched_start_var,
                                       font=("Helvetica", 9), relief=tk.SOLID,
                                       bd=1, width=11)
         self._start_entry.grid(row=0, column=1, sticky=tk.W, padx=(2, 8))
-        self._start_entry.bind("<FocusOut>", lambda e: self._update_session_count_label())
-        self._start_entry.bind("<Return>",   lambda e: self._update_session_count_label())
+        self._start_entry.bind("<FocusOut>", lambda e: self._on_session_param_changed())
+        self._start_entry.bind("<Return>",   lambda e: self._on_session_param_changed())
 
-        _default_end = _exam_dates(DEFAULT_START_DATE, DEFAULT_TOTAL_DAYS)[-1]
         tk.Label(ctrl, text="End:", bg=CLR_WHITE,
                  font=("Helvetica", 9)).grid(row=0, column=2, sticky=tk.W)
         self.sched_end_var = tk.StringVar(
-            value=_default_end.strftime("%Y-%m-%d"))
+            value=DEFAULT_EXAM_END.strftime("%Y-%m-%d"))
         self._end_entry = tk.Entry(ctrl, textvariable=self.sched_end_var,
                                     font=("Helvetica", 9), relief=tk.SOLID,
                                     bd=1, width=11)
         self._end_entry.grid(row=0, column=3, sticky=tk.W, padx=(2, 8))
-        self._end_entry.bind("<FocusOut>", lambda e: self._on_session_dates_changed())
-        self._end_entry.bind("<Return>",   lambda e: self._on_session_dates_changed())
+        self._end_entry.bind("<FocusOut>", lambda e: self._on_session_param_changed())
+        self._end_entry.bind("<Return>",   lambda e: self._on_session_param_changed())
 
         self.session_count_label = tk.Label(ctrl, text="", bg=CLR_WHITE,
                                              fg=CLR_BLUE,
                                              font=("Helvetica", 9, "bold"))
         self.session_count_label.grid(row=0, column=4, sticky=tk.W, padx=(0, 4))
 
-        # Row 1: Configure sessions button
+        # Row 1: AM / PM checkboxes + Configure sessions button  (BUG 6)
+        tk.Checkbutton(ctrl, text="AM", variable=self._am_var,
+                       bg=CLR_WHITE, font=("Helvetica", 9),
+                       command=self._on_session_param_changed
+                       ).grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
+        tk.Checkbutton(ctrl, text="PM", variable=self._pm_var,
+                       bg=CLR_WHITE, font=("Helvetica", 9),
+                       command=self._on_session_param_changed
+                       ).grid(row=1, column=1, sticky=tk.W, pady=(4, 0))
         tk.Button(ctrl, text="Configure sessions…",
                   command=self._open_session_calendar,
                   bg=CLR_LIGHT, font=("Helvetica", 8),
                   relief=tk.FLAT, padx=8
-                  ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
+                  ).grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=(4, 0))
 
         # Row 2: Grade filter + Generate
         tk.Label(ctrl, text="Grade:", bg=CLR_WHITE,
@@ -483,6 +535,16 @@ class TimePyBlingApp(tk.Tk):
                   font=("Helvetica", 9, "bold"), padx=10, pady=3
                   ).grid(row=3, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
 
+        # Per-grade slot summary (BUG 6)
+        self.slot_summary_text = tk.Text(sched_lf, height=5,
+                                          font=("Courier", 8),
+                                          state=tk.DISABLED, relief=tk.FLAT,
+                                          bg=CLR_LIGHT, wrap=tk.NONE)
+        self.slot_summary_text.pack(fill=tk.X, padx=2, pady=(0, 4))
+        self.slot_summary_text.tag_config("ok",    foreground=CLR_GREEN)
+        self.slot_summary_text.tag_config("short", foreground=CLR_RED)
+        self.slot_summary_text.tag_config("dim",   foreground="#888")
+
         # Initialise the slot count label
         self._update_session_count_label()
 
@@ -496,6 +558,41 @@ class TimePyBlingApp(tk.Tk):
         self.sched_text.tag_config("dim",     foreground="#888")
         self.sched_text.tag_config("warn",    foreground="#e67e22")
         self.sched_text.tag_config("day_sep", foreground="#bdc3c7")
+
+        # ── Exam Cost Function  (BUG 3 — exam tab)  ──
+        cost_lf = tk.LabelFrame(right, text="Exam Cost Function",
+                                 bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
+                                 padx=8, pady=6)
+        cost_lf.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        wf = tk.Frame(cost_lf, bg=CLR_WHITE)
+        wf.pack(fill=tk.X)
+        weight_defs = [("W_day", 5), ("W_week", 1),
+                       ("W_consec", 50), ("W_marking", 20)]
+        self._cost_weight_vars: list[tk.StringVar] = []
+        for i, (lbl, dflt) in enumerate(weight_defs):
+            r, c = i // 2, (i % 2) * 3
+            tk.Label(wf, text=f"{lbl}:", bg=CLR_WHITE,
+                     font=("Helvetica", 8)).grid(row=r, column=c, sticky=tk.W,
+                                                  padx=(0, 2), pady=2)
+            v = tk.StringVar(value=str(dflt))
+            self._cost_weight_vars.append(v)
+            tk.Entry(wf, textvariable=v, font=("Helvetica", 8),
+                     relief=tk.SOLID, bd=1, width=5
+                     ).grid(row=r, column=c + 1, sticky=tk.W, padx=(0, 12), pady=2)
+
+        calc_row = tk.Frame(cost_lf, bg=CLR_WHITE)
+        calc_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(calc_row, text="Calculate",
+                  command=self._calculate_exam_cost,
+                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 8, "bold"), padx=8
+                  ).pack(side=tk.LEFT)
+        self.exam_cost_result_label = tk.Label(calc_row, text="",
+                                                bg=CLR_WHITE,
+                                                font=("Courier", 8),
+                                                justify=tk.LEFT)
+        self.exam_cost_result_label.pack(side=tk.LEFT, padx=6)
 
     # ─────────────────────────────────────────────────────────
     # TAB 4 — EXPORT
@@ -536,6 +633,22 @@ class TimePyBlingApp(tk.Tk):
     # LOAD
     # ─────────────────────────────────────────────────────────
 
+    def _load_st1_path(self, path: Path):
+        """Internal load — used by auto-load and the Load button."""
+        self.st1_path = path
+        self.st1_label.config(text=path.name, fg=CLR_WHITE)
+        try:
+            self.timetable_tree = build_timetable_tree_from_file(path)
+        except Exception as e:
+            messagebox.showerror("Load Error", str(e))
+            return
+        suggested = path.parent / "ST1_optimised.xlsx"
+        self.export_path_var.set(str(suggested))
+        self._populate_timetable_tree()
+        self._rebuild_exam()
+        self._run_verification()
+        self.notebook.select(self.tab_exams)
+
     def _load_st1(self):
         path = filedialog.askopenfilename(
             title="Select student timetable (ST1.xlsx)",
@@ -543,19 +656,7 @@ class TimePyBlingApp(tk.Tk):
                        ("All files",   "*.*")])
         if not path:
             return
-        self.st1_path = Path(path)
-        self.st1_label.config(text=self.st1_path.name, fg=CLR_WHITE)
-        try:
-            self.timetable_tree = build_timetable_tree_from_file(self.st1_path)
-        except Exception as e:
-            messagebox.showerror("Load Error", str(e))
-            return
-        suggested = self.st1_path.parent / "ST1_optimised.xlsx"
-        self.export_path_var.set(str(suggested))
-        self._populate_timetable_tree()
-        self._rebuild_exam()
-        self._run_verification()
-        self.notebook.select(self.tab_exams)
+        self._load_st1_path(Path(path))
 
     def _load_teachers(self):
         path = filedialog.askopenfilename(
@@ -575,19 +676,25 @@ class TimePyBlingApp(tk.Tk):
             self._run_verification()
 
     # ─────────────────────────────────────────────────────────
-    # VERIFICATION
+    # VERIFICATION  (BUG 2)
     # ─────────────────────────────────────────────────────────
 
     def _run_verification(self):
         if not self.timetable_tree:
             return
         self._update_clash_report()
-        self._update_cost_panel()
-        self._update_qualification_panel()
+        self._update_integrity_panel()
 
     def _update_clash_report(self):
+        """Left panel: Clashes + Schedulable Pairs."""
         w = self.clash_report
         _clear(w)
+
+        # ── CLASHES ──
+        _write(w, "━" * 60 + "\n", "dim")
+        _write(w, "CLASHES\n", "heading")
+        _write(w, "━" * 60 + "\n", "dim")
+
         student_clashes, teacher_clashes = _find_clashes(self.timetable_tree)
         is_legal = not student_clashes and not teacher_clashes
 
@@ -625,43 +732,52 @@ class TimePyBlingApp(tk.Tk):
         _write(w, f"Total violations: {total}\n",
                "pass" if total == 0 else "fail")
 
-    def _update_cost_panel(self):
-        w = self.cost_text
-        _clear(w)
-        _write(w, "Cost function (optimiser module) not yet available.\n", "bad")
+        # ── SCHEDULABLE PAIRS ──
+        _write(w, "\n" + "━" * 60 + "\n", "dim")
+        _write(w, "SCHEDULABLE PAIRS  (share no students — can sit same slot)\n",
+               "heading")
+        _write(w, "━" * 60 + "\n", "dim")
 
-    def _update_qualification_panel(self):
-        w = self.qual_text
-        _clear(w)
-        if not self.timetable_tree:
-            return
-        if not self.teacher_subj_map:
-            _write(w, "Load teachers.xlsx to check qualifications.\n", "dim")
-            return
-        actual = _extract_teacher_subjects_from_tree(self.timetable_tree)
-        issues, ok_count = [], 0
-        for teacher, subjects_taught in sorted(actual.items()):
-            pool = self.teacher_subj_map.get(teacher)
-            if pool is None:
-                issues.append(f"  {teacher:<16} not found in teachers.xlsx\n")
-                continue
-            unqualified = subjects_taught - pool
-            if unqualified:
-                for subj in sorted(unqualified):
-                    issues.append(f"  {teacher:<16} teaching {subj} "
-                                  f"(pool: {', '.join(sorted(pool))})\n")
-            else:
-                ok_count += 1
-        if issues:
-            _write(w, f"{len(issues)} qualification issue(s) found:\n", "warn")
-            _write(w, "─" * 44 + "\n", "dim")
-            for line in issues:
-                _write(w, line, "warn")
-            _write(w, "─" * 44 + "\n", "dim")
-            _write(w, f"\n  {ok_count} teacher(s) fully qualified.\n", "ok")
+        if not self.exam_tree:
+            _write(w, "(Load timetable to see schedulable pairs)\n", "dim")
         else:
-            _write(w, "PASS ✓  —  all teachers qualified\n", "ok")
-            _write(w, f"\n  {ok_count} teacher(s) checked.\n", "dim")
+            any_pairs = False
+            for grade_label in sorted(self.exam_tree.grades.keys()):
+                grade_node = self.exam_tree.grades[grade_label]
+                groups = {
+                    subj_label: subject.all_students()
+                    for subj_label, subject in grade_node.exam_subjects.items()
+                    if not _is_subject_excluded(subj_label, self.exclusions)
+                }
+                if not groups:
+                    continue
+                cm = ConflictMatrix(grade_label, groups)
+                pairs = cm.free_pairs()
+                if pairs:
+                    any_pairs = True
+                    _write(w, f"\n  {grade_label}  ({len(pairs)} pair(s)):\n",
+                           "heading")
+                    for a, b in pairs:
+                        _write(w, f"    {a}  +  {b}\n", "pass")
+            if not any_pairs:
+                _write(w, "  No free pairs — all subjects share students.\n", "dim")
+
+    def _update_integrity_panel(self):
+        """Right panel: Data Integrity — classes with fewer than 5 students."""
+        w = self.integrity_report
+        _clear(w)
+        _write(w, "Classes with fewer than 5 students:\n", "dim")
+        _write(w, "─" * 44 + "\n", "dim")
+        issues = _data_integrity_issues(self.timetable_tree)
+        if not issues:
+            _write(w, "PASS ✓  —  all classes have 5 or more students\n", "pass")
+        else:
+            _write(w, f"WARN ⚠  —  {len(issues)} class(es) flagged:\n", "warn")
+            for info in issues:
+                _write(w, f"\n  {info['label']}\n", "heading")
+                _write(w, f"    Count:     {info['count']}\n", "warn")
+                _write(w, f"    Subblocks: {info['subblocks']}\n", "dim")
+                _write(w, f"    Students:  {info['students']}\n", "dim")
 
     # ─────────────────────────────────────────────────────────
     # TIMETABLE TREE
@@ -701,22 +817,38 @@ class TimePyBlingApp(tk.Tk):
         self._populate_timetable_tree(filter_text=self.search_var.get())
 
     # ─────────────────────────────────────────────────────────
-    # EXAM TREE
+    # EXAM TREE  (BUG 4)
     # ─────────────────────────────────────────────────────────
 
     def _populate_exam_tree(self):
+        """Populate from exam_tree; excluded subjects shown with [excl] suffix."""
         self.ex_tree.delete(*self.ex_tree.get_children())
-        if not self.paper_registry:
+        if not self.exam_tree:
             return
-        for grade in self.paper_registry.grades():
-            grade_ui = self.ex_tree.insert("", tk.END, text=grade, open=False)
-            for subj in self.paper_registry.subjects_for_grade(grade):
-                papers = self.paper_registry.papers_for_subject_grade(subj, grade)
-                count  = max(p.student_count() for p in papers)
-                self.ex_tree.insert(grade_ui, tk.END,
-                                    text=f"{subj}  ({count} students)",
-                                    tags=("subject",),
-                                    values=(subj, grade))
+        for grade_label in sorted(self.exam_tree.grades.keys()):
+            grade_node = self.exam_tree.grades[grade_label]
+            grade_ui = self.ex_tree.insert("", tk.END, text=grade_label, open=False)
+            for subj_label in sorted(grade_node.exam_subjects.keys()):
+                exam_subject = grade_node.exam_subjects[subj_label]
+                excl = _is_subject_excluded(subj_label, self.exclusions)
+                if excl:
+                    self.ex_tree.insert(grade_ui, tk.END,
+                                        text=f"{subj_label}  [excl]",
+                                        tags=("excluded",),
+                                        values=())
+                else:
+                    subj_code = subj_label.split("_")[0]
+                    if self.paper_registry:
+                        papers = self.paper_registry.papers_for_subject_grade(
+                            subj_code, grade_label)
+                        count = (max(p.student_count() for p in papers)
+                                 if papers else len(exam_subject.all_students()))
+                    else:
+                        count = len(exam_subject.all_students())
+                    self.ex_tree.insert(grade_ui, tk.END,
+                                        text=f"{subj_code}  ({count} students)",
+                                        tags=("subject",),
+                                        values=(subj_code, grade_label))
 
     def _exam_tree_get_state(self) -> tuple[set[str], list[tuple[str, str]]]:
         """Return (expanded_grade_texts, selected_(subject,grade)_pairs)."""
@@ -737,7 +869,8 @@ class TimePyBlingApp(tk.Tk):
                                   selected_pairs: list[tuple[str, str]]):
         """Re-expand grade nodes and re-select subject nodes after a rebuild."""
         for item in self.ex_tree.get_children():
-            if self.ex_tree.item(item, "text") in expanded:
+            raw = self.ex_tree.item(item, "text")
+            if raw in expanded:
                 self.ex_tree.item(item, open=True)
         if not selected_pairs:
             return
@@ -801,7 +934,6 @@ class TimePyBlingApp(tk.Tk):
             self._refresh_constraint_list(papers[0])
 
     def _refresh_paper_panel_multi(self, subject_grade_pairs: list[tuple[str, str]]):
-        """Summary view when multiple subjects are selected."""
         self.paper_listbox.delete(0, tk.END)
         self.constr_listbox.delete(0, tk.END)
         self._selected_paper_label = None
@@ -836,7 +968,6 @@ class TimePyBlingApp(tk.Tk):
         tree_sel = self.ex_tree.selection()
         if not tree_sel:
             return
-        # Only act if exactly one subject is selected in the tree
         subject_pairs = []
         for item in tree_sel:
             tags = self.ex_tree.item(item, "tags")
@@ -868,6 +999,7 @@ class TimePyBlingApp(tk.Tk):
         self._selected_paper_label = None
         self._populate_exam_tree()
         self._update_sched_grade_list()
+        self._update_session_count_label()
 
     def _update_sched_grade_list(self):
         if not self.paper_registry:
@@ -877,6 +1009,39 @@ class TimePyBlingApp(tk.Tk):
         self.sched_grade_cb["values"] = options
         if grades:
             self.sched_grade_var.set(grades[-1])
+
+    # ─────────────────────────────────────────────────────────
+    # EXCLUSION LIST  (BUG 4 — no _rebuild_exam on change)
+    # ─────────────────────────────────────────────────────────
+
+    def _refresh_exclusion_listbox(self):
+        self.excl_listbox.delete(0, tk.END)
+        for code in sorted(self.exclusions):
+            self.excl_listbox.insert(tk.END, code)
+
+    def _add_exclusion(self):
+        code = self.excl_entry.get().strip().upper()
+        if not code:
+            return
+        self.exclusions.add(code)
+        self.excl_entry.delete(0, tk.END)
+        self._on_exclusion_change()
+
+    def _remove_exclusion(self):
+        sel = self.excl_listbox.curselection()
+        if not sel:
+            return
+        code = self.excl_listbox.get(sel[0])
+        self.exclusions.discard(code)
+        self._on_exclusion_change()
+
+    def _on_exclusion_change(self):
+        """Update tree labels and slot summary — no file re-read."""
+        expanded, selected_pairs = self._exam_tree_get_state()
+        self._refresh_exclusion_listbox()
+        self._populate_exam_tree()
+        self._exam_tree_restore_state(expanded, selected_pairs)
+        self._update_session_count_label()
 
     # ─────────────────────────────────────────────────────────
     # PAPER PANEL ACTIONS
@@ -894,7 +1059,6 @@ class TimePyBlingApp(tk.Tk):
     def _add_paper(self):
         if not self.paper_registry:
             return
-        # Collect all selected subject nodes
         sel = self.ex_tree.selection()
         subject_pairs = []
         for item in sel:
@@ -927,13 +1091,11 @@ class TimePyBlingApp(tk.Tk):
 
         self._populate_exam_tree()
         self._exam_tree_restore_state(expanded, selected_pairs)
-        # Refresh paper panel to match restored selection
         self._on_exam_tree_select()
 
     def _remove_paper(self):
         if not self.paper_registry or not self._selected_paper_label:
             return
-        # Parse subject+grade from the label (format: SUBJ_PN_GRADE)
         parts = self._selected_paper_label.split("_")
         subject = parts[0] if parts else None
         grade   = parts[-1] if len(parts) >= 3 else None
@@ -979,6 +1141,138 @@ class TimePyBlingApp(tk.Tk):
             self._refresh_paper_panel(subject, grade)
 
     # ─────────────────────────────────────────────────────────
+    # IMPORT / EXPORT EXAM STATE  (BUG 5)
+    # ─────────────────────────────────────────────────────────
+
+    def _export_exam_state(self):
+        path = filedialog.asksaveasfilename(
+            title="Export exam state",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        papers_data: dict[str, list[str]] = {}
+        if self.paper_registry:
+            for grade in self.paper_registry.grades():
+                grade_num = grade.replace("Gr", "")
+                for subj in self.paper_registry.subjects_for_grade(grade):
+                    ps = self.paper_registry.papers_for_subject_grade(subj, grade)
+                    papers_data[f"{subj}_{grade_num}"] = [
+                        f"P{p.paper_number}" for p in ps]
+        data = {
+            "exclusions": sorted(self.exclusions),
+            "papers":     papers_data,
+            "session": {
+                "start": self.sched_start_var.get(),
+                "end":   self.sched_end_var.get(),
+                "am":    self._am_var.get(),
+                "pm":    self._pm_var.get(),
+            },
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            messagebox.showinfo("Exported", f"Exam state saved to:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", str(e))
+
+    def _import_exam_state(self):
+        path = filedialog.askopenfilename(
+            title="Import exam state",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as e:
+            messagebox.showerror("Import Error", str(e))
+            return
+
+        if "exclusions" in data:
+            self.exclusions = set(data["exclusions"])
+            self._refresh_exclusion_listbox()
+
+        if "session" in data:
+            s = data["session"]
+            if "start" in s:
+                self.sched_start_var.set(s["start"])
+            if "end" in s:
+                self.sched_end_var.set(s["end"])
+            if "am" in s:
+                self._am_var.set(bool(s["am"]))
+            if "pm" in s:
+                self._pm_var.set(bool(s["pm"]))
+            self._sessions = None
+
+        # Rebuild from file to get fresh P1 registry honoring new exclusions
+        if self.timetable_tree:
+            self._rebuild_exam()
+
+        # Restore extra papers (P2, P3)
+        if "papers" in data and self.paper_registry:
+            for subj_grade, paper_nums in data["papers"].items():
+                parts = subj_grade.split("_")
+                if len(parts) != 2:
+                    continue
+                subj, grade_num = parts
+                grade = f"Gr{grade_num}"
+                max_num = max(
+                    (int(p.replace("P", "")) for p in paper_nums
+                     if p.startswith("P") and p[1:].isdigit()),
+                    default=1,
+                )
+                for _ in range(max_num - 1):
+                    self.paper_registry.add_paper(subj, grade)
+
+        self._populate_exam_tree()
+        self._update_session_count_label()
+        messagebox.showinfo("Imported", f"Exam state loaded from:\n{path}")
+
+    # ─────────────────────────────────────────────────────────
+    # EXAM COST FUNCTION  (BUG 3 — exam tab)
+    # ─────────────────────────────────────────────────────────
+
+    def _calculate_exam_cost(self):
+        if not self.schedule_result:
+            self.exam_cost_result_label.config(text="Generate schedule first.")
+            return
+        try:
+            w_day     = float(self._cost_weight_vars[0].get())
+            w_week    = float(self._cost_weight_vars[1].get())
+            w_consec  = float(self._cost_weight_vars[2].get())
+            w_marking = float(self._cost_weight_vars[3].get())
+        except ValueError:
+            self.exam_cost_result_label.config(text="Invalid weight values.")
+            return
+
+        # Student clustering cost already computed by scheduler
+        t_student = self.schedule_result.student_cost
+
+        # Consecutive same-subject papers (adjacent slot indices)
+        consec_count = 0
+        by_sg: dict[tuple[str, str], list] = defaultdict(list)
+        for sp in self.schedule_result.scheduled:
+            by_sg[(sp.paper.subject, sp.paper.grade)].append(sp.slot_index)
+        for slots_list in by_sg.values():
+            sorted_s = sorted(slots_list)
+            for i in range(len(sorted_s) - 1):
+                if sorted_s[i + 1] - sorted_s[i] == 1:
+                    consec_count += 1
+        t_consec = w_consec * consec_count
+
+        marking_count = len(self.schedule_result.teacher_warnings)
+        t_marking = w_marking * marking_count
+
+        total = t_student + t_consec + t_marking
+        self.exam_cost_result_label.config(
+            text=(f"E = {total:.0f}\n"
+                  f"  student (W_day={w_day:.0f}, W_week={w_week:.0f}) = {t_student}\n"
+                  f"  consec {w_consec:.0f}×{consec_count} = {t_consec:.0f}\n"
+                  f"  marking {w_marking:.0f}×{marking_count} = {t_marking:.0f}")
+        )
+
+    # ─────────────────────────────────────────────────────────
     # EXAM SCHEDULE GENERATOR
     # ─────────────────────────────────────────────────────────
 
@@ -993,12 +1287,20 @@ class TimePyBlingApp(tk.Tk):
             return
         if not sessions:
             messagebox.showerror("No sessions",
-                                  "No exam sessions in the selected date range.")
+                                  "No exam sessions in the selected date range.\n"
+                                  "Check AM/PM checkboxes and date range.")
             return
+        try:
+            w_day  = int(float(self._cost_weight_vars[0].get()))
+            w_week = int(float(self._cost_weight_vars[1].get()))
+        except (ValueError, AttributeError):
+            w_day, w_week = 5, 1
         self.schedule_result = build_schedule(
             registry  = self.paper_registry,
             sessions  = sessions,
             exam_tree = self.exam_tree,
+            w_day     = w_day,
+            w_week    = w_week,
         )
         self._render_schedule()
 
@@ -1051,12 +1353,7 @@ class TimePyBlingApp(tk.Tk):
 
         _write(w, "─" * 68 + "\n", "dim")
 
-        # Warnings section
-        all_warnings = [
-            w_msg
-            for sp in items
-            for w_msg in sp.warnings
-        ]
+        all_warnings = [w_msg for sp in items for w_msg in sp.warnings]
         seen: set[str] = set()
         unique_warnings = [x for x in all_warnings
                            if not (x in seen or seen.add(x))]
@@ -1071,16 +1368,10 @@ class TimePyBlingApp(tk.Tk):
                 _write(w, f"  ⚠  {msg}\n", "warn")
 
     # ─────────────────────────────────────────────────────────
-    # SESSION CALENDAR
+    # SESSION DATES + SLOT COUNT  (BUG 6)
     # ─────────────────────────────────────────────────────────
 
     def _get_effective_sessions(self) -> list[tuple[date, str]] | None:
-        """
-        Return the active session list.
-        If self._sessions is set (from popup), return it directly.
-        Otherwise compute from start/end date entries.
-        Returns None if dates are invalid.
-        """
         if self._sessions is not None:
             return self._sessions
         try:
@@ -1096,7 +1387,20 @@ class TimePyBlingApp(tk.Tk):
             if d.weekday() in EXAM_WEEKDAYS:
                 days.append(d)
             d += timedelta(days=1)
-        return [(day, sess) for day in days for sess in SESSIONS]
+        am = self._am_var.get()
+        pm = self._pm_var.get()
+        sessions: list[tuple[date, str]] = []
+        for day in days:
+            if am:
+                sessions.append((day, "AM"))
+            if pm:
+                sessions.append((day, "PM"))
+        return sessions
+
+    def _on_session_param_changed(self):
+        """Date entry or AM/PM checkbox changed — reset any custom session list."""
+        self._sessions = None
+        self._update_session_count_label()
 
     def _update_session_count_label(self):
         if self.session_count_label is None:
@@ -1104,6 +1408,7 @@ class TimePyBlingApp(tk.Tk):
         sessions = self._get_effective_sessions()
         if sessions is None:
             self.session_count_label.config(text="invalid dates", fg=CLR_RED)
+            self._update_slot_summary(None)
             return
         n_days  = len({d for d, _ in sessions})
         n_slots = len(sessions)
@@ -1115,26 +1420,58 @@ class TimePyBlingApp(tk.Tk):
             text=txt,
             fg="#8e44ad" if custom else CLR_BLUE
         )
+        self._update_slot_summary(n_slots)
 
-    def _on_session_dates_changed(self):
-        """Called when start or end date entry loses focus — reset custom sessions."""
-        self._sessions = None
-        self._update_session_count_label()
+    def _needed_slots_per_grade(self) -> dict[str, int]:
+        """Run DSatur per grade on the current paper_registry."""
+        if not self.paper_registry:
+            return {}
+        result: dict[str, int] = {}
+        for grade in self.paper_registry.grades():
+            papers = self.paper_registry.papers_for_grade(grade)
+            if not papers:
+                continue
+            student_sets = {p.label: p.student_ids for p in papers}
+            graph = build_clash_graph(student_sets)
+            coloring = dsatur_colouring(graph)
+            result[grade] = (max(coloring.values()) + 1) if coloring else 0
+        return result
+
+    def _update_slot_summary(self, available: int | None):
+        if not hasattr(self, "slot_summary_text"):
+            return
+        w = self.slot_summary_text
+        w.config(state=tk.NORMAL)
+        w.delete("1.0", tk.END)
+        if available is None or not self.paper_registry:
+            w.config(state=tk.DISABLED)
+            return
+        needed = self._needed_slots_per_grade()
+        if not needed:
+            w.insert(tk.END, "  (no papers — load timetable first)\n", "dim")
+        for grade in sorted(needed.keys()):
+            n     = needed[grade]
+            spare = available - n
+            if spare >= 0:
+                line = f"  {grade}: {n} needed / {available} available  ✓ {spare} spare\n"
+                tag  = "ok"
+            else:
+                line = f"  {grade}: {n} needed / {available} available  ✗ SHORT by {-spare}\n"
+                tag  = "short"
+            w.insert(tk.END, line, tag)
+        w.config(state=tk.DISABLED)
 
     def _open_session_calendar(self):
-        """Open a popup to toggle individual AM/PM sessions on or off."""
         sessions = self._get_effective_sessions()
         if not sessions:
             messagebox.showerror("Invalid dates",
                                   "Enter valid start and end dates first.")
             return
 
-        # Build day → {AM: bool, PM: bool} map from current effective sessions
         day_state: dict[date, dict[str, bool]] = {}
         for d, s in sessions:
             day_state.setdefault(d, {"AM": False, "PM": False})
             day_state[d][s] = True
-        # If we have custom sessions, mark unchecked slots too
         if self._sessions is not None:
             for d in day_state:
                 for s in SESSIONS:
@@ -1292,7 +1629,7 @@ class TimePyBlingApp(tk.Tk):
                   ).pack(side=tk.LEFT, padx=8)
 
     # ─────────────────────────────────────────────────────────
-    # SCHEDULE POPOUT  (Task 3)
+    # SCHEDULE POPOUT
     # ─────────────────────────────────────────────────────────
 
     def _open_schedule_popout(self):
@@ -1300,15 +1637,12 @@ class TimePyBlingApp(tk.Tk):
             messagebox.showinfo("No schedule", "Generate a schedule first.")
             return
 
-        from collections import defaultdict
-
         result = self.schedule_result
         grades = sorted(
             {sp.paper.grade for sp in result.scheduled},
             key=lambda g: int(g[2:]) if g[2:].isdigit() else 0
         )
 
-        # grid[slot_index][grade] = [subject_codes]
         grid: dict[int, dict[str, list[str]]] = defaultdict(
             lambda: {g: [] for g in grades})
         slot_meta: dict[int, tuple] = {}
@@ -1335,7 +1669,6 @@ class TimePyBlingApp(tk.Tk):
                   font=("Helvetica", 9, "bold"), padx=10
                   ).pack(side=tk.RIGHT)
 
-        # Scrollable canvas
         cf = tk.Frame(top, bg=CLR_WHITE)
         cf.pack(fill=tk.BOTH, expand=True)
         canvas = tk.Canvas(cf, bg=CLR_WHITE, highlightthickness=0)
@@ -1349,11 +1682,10 @@ class TimePyBlingApp(tk.Tk):
         gf = tk.Frame(canvas, bg=CLR_WHITE)
         canvas.create_window((0, 0), window=gf, anchor="nw")
 
-        COL_W = 10   # character width for grade columns
-        ROW_W = 22   # character width for row-label column
+        COL_W = 10
+        ROW_W = 22
         HDR_BG = "#d5d8dc"
 
-        # Header row
         tk.Label(gf, text="Slot / Date / Sess", font=("Helvetica", 8, "bold"),
                  bg=HDR_BG, width=ROW_W, anchor="w",
                  relief=tk.RIDGE, bd=1).grid(row=0, column=0, sticky="nsew",
@@ -1364,7 +1696,6 @@ class TimePyBlingApp(tk.Tk):
                      relief=tk.RIDGE, bd=1).grid(row=0, column=ci + 1,
                                                   sticky="nsew", padx=1, pady=1)
 
-        # Data rows
         for ri, slot_idx in enumerate(all_slots):
             d, session = slot_meta[slot_idx]
             row_bg = CLR_MORNING if session == "AM" else CLR_AFTERNOON
@@ -1423,7 +1754,6 @@ class TimePyBlingApp(tk.Tk):
         doc = SimpleDocTemplate(path, pagesize=landscape(A4),
                                 leftMargin=18, rightMargin=18,
                                 topMargin=18, bottomMargin=18)
-
         header_row = ["Slot / Date / Session"] + grades
         rows = [header_row]
         for slot_idx in all_slots:
@@ -1437,10 +1767,8 @@ class TimePyBlingApp(tk.Tk):
 
         col_widths = [130] + [50] * len(grades)
         table = Table(rows, colWidths=col_widths, repeatRows=1)
-
         am_bg = colors.Color(0.91, 0.96, 0.91)
         pm_bg = colors.Color(1.0,  0.97, 0.88)
-
         style_cmds = [
             ("FONTNAME",   (0, 0), (-1, 0),  "Helvetica-Bold"),
             ("FONTSIZE",   (0, 0), (-1, -1), 7),
@@ -1453,7 +1781,6 @@ class TimePyBlingApp(tk.Tk):
             _, session = slot_meta[slot_idx]
             bg = am_bg if session == "AM" else pm_bg
             style_cmds.append(("BACKGROUND", (0, ri), (-1, ri), bg))
-
         table.setStyle(TableStyle(style_cmds))
         doc.build([table])
 
@@ -1506,31 +1833,6 @@ class TimePyBlingApp(tk.Tk):
         _write(w, "\nExport not yet available.\n", "err")
         _write(w, "Waiting on:  timetable_converter.timetable_tree_to_block_tree()\n",
                "info")
-
-    # ─────────────────────────────────────────────────────────
-    # EXCLUSION LIST
-    # ─────────────────────────────────────────────────────────
-
-    def _refresh_exclusion_listbox(self):
-        self.excl_listbox.delete(0, tk.END)
-        for code in sorted(self.exclusions):
-            self.excl_listbox.insert(tk.END, code)
-
-    def _add_exclusion(self):
-        code = self.excl_entry.get().strip().upper()
-        if not code:
-            return
-        self.exclusions.add(code)
-        self.excl_entry.delete(0, tk.END)
-        self._refresh_exclusion_listbox()
-
-    def _remove_exclusion(self):
-        sel = self.excl_listbox.curselection()
-        if not sel:
-            return
-        code = self.excl_listbox.get(sel[0])
-        self.exclusions.discard(code)
-        self._refresh_exclusion_listbox()
 
     # ─────────────────────────────────────────────────────────
     # STYLING

@@ -10,33 +10,38 @@ Step 0  Pinned papers are placed first at their pinned_slot.
         do not block placement — the user chose those slots deliberately.
 
 Step 1  Collect priority papers (MA and PH), sorted Gr12→Gr08 then P1→P3.
-        Assign each to the slot that:
-          a) does not clash with any already-assigned paper, AND
-          b) maximises the minimum gap (in slots) to other papers with the
-             same subject code within the SAME grade (e.g. MA_P1_Gr12 vs
-             MA_P2_Gr12).  Papers from other grades have no spacing requirement.
+        Assign each using _pick_spread_slot (even load + gap maximisation).
 
-Step 2  Collect remaining papers, sorted by student count desc, then grade desc.
-        Assign with DSatur respecting the full clash graph and treating
-        already-assigned slots as fixed.
+Step 2  Collect remaining papers via DSatur saturation ordering.
+        Each paper is placed using _pick_spread_slot (not first-available).
 
-Step 3  Spacing penalty pass.  Same-subject, same-grade papers in the same
-        Mon–Fri week are flagged as warnings (per-grade diagnostic).
-        Non-priority papers are swapped to a better slot if one exists with
-        no new clashes introduced.
+Step 3  Spacing penalty pass — same-subject same-grade in the same ISO week
+        produces a warning; non-priority papers are swapped to a better slot
+        if one exists with no new clashes.
 
-Step 4  Teacher marking load diagnostic.  Same subject + same teacher code
-        appearing in multiple grades in the same slot is flagged as a warning
-        (requires exam_tree to be passed in).
+Step 4  Teacher marking load diagnostic.
+
+Step 5  Student-load hill-climb.  Minimises total quadratic clustering cost:
+          day_penalty(k)  = k*(k-1) * W_DAY   for k exams on the same day
+          week_penalty(k) = (k-1)*(k+6) // 2  for k exams in the same ISO week
+        For each non-pinned paper, try moving it to every other slot.
+        Accept the move if it reduces total student cost and introduces no
+        clash.  Repeat until no improvement (max 20 passes).
+        Cost stored in ScheduleResult.student_cost.
 
 Output  ScheduleResult — list of ScheduledPaper (one per ExamPaper).
+
+Penalty constants
+-----------------
+  W_DAY  = 5   →  2 exams same day  → per-student cost 10
+                   3 exams same day  → per-student cost 30
+  week_penalty:    1 exam  → 0,  2 exams → 4,  3 exams → 9  (quadratic)
 
 Configuration
 -------------
   Sessions per day : 2  (AM, PM)
   Slot 0  = Day 1 AM,  Slot 1  = Day 1 PM,  Slot 2 = Day 2 AM, …
   Exam days: Monday–Friday only; weekends are skipped.
-  Default start: next Thursday from the date the module is imported.
 """
 
 from __future__ import annotations
@@ -54,6 +59,21 @@ from reader.exam_clash import build_paper_clash_graph
 SESSIONS          = ["AM", "PM"]
 EXAM_WEEKDAYS     = {0, 1, 2, 3, 4}          # Mon=0 … Fri=4
 PRIORITY_SUBJECTS = {"MA", "PH"}
+
+# ── Student load penalty weights ──────────────────────────────────────────────
+W_DAY = 5    # k exams on same day  → k*(k-1)*W_DAY per student  (k=2 → 10)
+             # week_penalty uses fixed formula (k-1)*(k+6)//2    (k=2 → 4, k=3 → 9)
+
+
+def _day_penalty(k: int) -> int:
+    """Per-student cost for k exams on the same calendar day."""
+    return k * (k - 1) * W_DAY if k > 1 else 0
+
+
+def _week_penalty(k: int) -> int:
+    """Per-student cost for k exams in the same ISO week.
+    k=1→0, k=2→4, k=3→9, k=4→15, … (quadratic growth)."""
+    return (k - 1) * (k + 6) // 2 if k > 1 else 0
 
 
 def _next_thursday(from_date: date | None = None) -> date:
@@ -87,6 +107,7 @@ class ScheduleResult:
     sessions           : list[tuple[date, str]] = field(default_factory=list)
     pin_clash_warnings : dict[str, list[str]]   = field(default_factory=dict)
     teacher_warnings   : list[str]               = field(default_factory=list)
+    student_cost       : int = 0
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -113,6 +134,34 @@ def _grade_sort_key(grade: str) -> int:
         return int(grade.replace("Gr", "").replace("gr", ""))
     except ValueError:
         return 0
+
+
+def _pick_spread_slot(
+    valid_slots : list[int],
+    assignment  : dict[str, int],
+    paper_label : str,
+    num_slots   : int,
+) -> int:
+    """
+    Choose the slot from valid_slots that best spreads the schedule:
+      1. Fewest papers already in that slot  (primary — even load)
+      2. Maximum minimum gap to same-subject same-grade papers  (secondary)
+    """
+    load: dict[int, int] = defaultdict(int)
+    for s in assignment.values():
+        load[s] += 1
+
+    subj, _, grade = _label_to_parts(paper_label)
+    same_sg = [
+        assignment[lbl] for lbl in assignment
+        if _label_to_parts(lbl)[0] == subj and _label_to_parts(lbl)[2] == grade
+    ]
+
+    def score(s: int) -> tuple:
+        gap = min(abs(s - o) for o in same_sg) if same_sg else num_slots
+        return (-load[s], gap)
+
+    return max(valid_slots, key=score)
 
 
 # ── Teacher code extraction ───────────────────────────────────────────────────
@@ -181,6 +230,8 @@ def build_schedule(
     sessions_per_day : int  = 2,
     sessions         : list[tuple[date, str]] | None = None,
     exam_tree        = None,
+    w_day            : int  = W_DAY,
+    w_week           : int  = 1,
 ) -> ScheduleResult:
     """
     Schedule all papers in the registry into a single cross-grade timetable.
@@ -257,27 +308,13 @@ def build_schedule(
     for paper in priority_papers:
         forbidden = {assignment[nb] for nb in graph[paper.label]
                      if nb in assignment}
-        valid_slots = [s for s in range(num_slots) if s not in forbidden]
-        if not valid_slots:
-            valid_slots = list(range(num_slots))
-
-        same_subj_slots = [
-            assignment[lbl]
-            for lbl in assignment
-            if _label_to_parts(lbl)[0] == paper.subject
-            and _label_to_parts(lbl)[2] == paper.grade
-        ]
-
-        def gap_score(s: int) -> int:
-            if not same_subj_slots:
-                return num_slots
-            return min(abs(s - other) for other in same_subj_slots)
-
-        best = max(valid_slots, key=gap_score)
+        valid_slots = [s for s in range(num_slots) if s not in forbidden] \
+                      or list(range(num_slots))
+        best = _pick_spread_slot(valid_slots, assignment, paper.label, num_slots)
         assignment[paper.label] = best
         priority_labels.add(paper.label)
 
-    # ── Step 2: DSatur for remaining papers ────────────────────────────────────
+    # ── Step 2: DSatur for remaining papers — spread across all slots ──────────
 
     remaining = [p for p in unpinned_papers if p.label not in assignment]
     remaining.sort(
@@ -303,12 +340,9 @@ def build_schedule(
         )
         forbidden = {assignment[nb] for nb in graph[chosen_label]
                      if nb in assignment}
-        slot = 0
-        while slot in forbidden and slot < num_slots:
-            slot += 1
-        if slot >= num_slots:
-            slot = num_slots - 1
-
+        valid = [s for s in range(num_slots) if s not in forbidden] \
+                or list(range(num_slots))
+        slot = _pick_spread_slot(valid, assignment, chosen_label, num_slots)
         assignment[chosen_label] = slot
 
         for nb in graph[chosen_label]:
@@ -394,6 +428,93 @@ def build_schedule(
     if exam_tree is not None:
         teacher_warnings = _teacher_marking_warnings(assignment, paper_map, exam_tree)
 
+    # ── Step 5: Student-load hill-climb ────────────────────────────────────────
+
+    def _dp(k: int) -> int:
+        return k * (k - 1) * w_day if k > 1 else 0
+
+    def _wp(k: int) -> int:
+        return ((k - 1) * (k + 6) // 2) * w_week if k > 1 else 0
+
+    # Build per-student day/week exam counts
+    s_day_c: dict[int, dict] = defaultdict(lambda: defaultdict(int))
+    s_wk_c:  dict[int, dict] = defaultdict(lambda: defaultdict(int))
+    for lbl, sl in assignment.items():
+        d, _ = exam_slots[min(sl, len(exam_slots) - 1)]
+        wk = _week_number(d)
+        for sid in paper_map[lbl].student_ids:
+            s_day_c[sid][d] += 1
+            s_wk_c[sid][wk] += 1
+
+    def _total_student_cost() -> int:
+        total = 0
+        for dc in s_day_c.values():
+            for k in dc.values():
+                total += _dp(k)
+        for wc in s_wk_c.values():
+            for k in wc.values():
+                total += _wp(k)
+        return total
+
+    student_cost = _total_student_cost()
+    non_pinned = [lbl for lbl in assignment if lbl not in pinned_label_set]
+
+    for _pass in range(20):
+        improved = False
+        for lbl in non_pinned:
+            sl_old = assignment[lbl]
+            d_old, _ = exam_slots[min(sl_old, len(exam_slots) - 1)]
+            wk_old = _week_number(d_old)
+            forbidden = {assignment[nb] for nb in graph[lbl]
+                         if nb in assignment and nb != lbl}
+
+            best_delta = 0
+            best_slot  = None
+
+            for sl_new in range(num_slots):
+                if sl_new == sl_old or sl_new in forbidden:
+                    continue
+                d_new, _ = exam_slots[min(sl_new, len(exam_slots) - 1)]
+                wk_new = _week_number(d_new)
+
+                delta = 0
+                for sid in paper_map[lbl].student_ids:
+                    if d_old != d_new:
+                        k_do = s_day_c[sid].get(d_old, 0)
+                        k_dn = s_day_c[sid].get(d_new, 0)
+                        delta += (_dp(k_do - 1) - _dp(k_do)
+                                  + _dp(k_dn + 1) - _dp(k_dn))
+                    if wk_old != wk_new:
+                        k_wo = s_wk_c[sid].get(wk_old, 0)
+                        k_wn = s_wk_c[sid].get(wk_new, 0)
+                        delta += (_wp(k_wo - 1) - _wp(k_wo)
+                                  + _wp(k_wn + 1) - _wp(k_wn))
+
+                if delta < best_delta:
+                    best_delta = delta
+                    best_slot  = sl_new
+
+            if best_slot is not None:
+                sl_new = best_slot
+                d_new, _ = exam_slots[min(sl_new, len(exam_slots) - 1)]
+                wk_new = _week_number(d_new)
+                # Update counts
+                for sid in paper_map[lbl].student_ids:
+                    s_day_c[sid][d_old] -= 1
+                    if s_day_c[sid][d_old] == 0:
+                        del s_day_c[sid][d_old]
+                    s_day_c[sid][d_new] += 1
+                    s_wk_c[sid][wk_old] -= 1
+                    if s_wk_c[sid][wk_old] == 0:
+                        del s_wk_c[sid][wk_old]
+                    s_wk_c[sid][wk_new] += 1
+                assignment[lbl] = sl_new
+                student_cost += best_delta
+                improved = True
+
+        if not improved:
+            break
+
     # ── Assemble result ────────────────────────────────────────────────────────
 
     scheduled: list[ScheduledPaper] = []
@@ -417,6 +538,7 @@ def build_schedule(
         sessions           = exam_slots,
         pin_clash_warnings = pin_clash_warnings,
         teacher_warnings   = teacher_warnings,
+        student_cost       = student_cost,
     )
 
 
