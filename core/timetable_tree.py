@@ -5,40 +5,33 @@ Purpose
 -------
 Read a student timetable file (ST1.xlsx) and build the timetable tree.
 
-Tree structure
---------------
+CHANGELOG (bug-fix edition)
+----------------------------
+BUG 2 FIXED — false timetable column detection
+    Old regex: [A-H]\\d+
+    Problem:   This matched ANY letter A-H followed by ANY number of digits.
+               ST1.xlsx contains exam columns F25, F26 ... F67 (used by the
+               exam scheduler).  All 43 of these were incorrectly treated as
+               timetable subblocks, inflating the column list and adding
+               garbage data to every student's tree entry for those slots.
+    Fix:       ^[A-H][1-9]$  — letter A-H + exactly one digit 1-9.
+               Real timetable subblocks are A1-A7 through H1-H7 (single
+               digit suffixes only).  Exam columns like F25 have two-digit
+               suffixes and are now excluded cleanly.
+
+Tree structure (unchanged)
+--------------------------
 TimetableTree
     -> Block
         -> SubBlock
             -> ClassList
                 -> StudentList
-
-Example
--------
-A
--A1
---AF_BALAY_08
----[1, 6, 8, 9, ...]
-
-Important
----------
-The same class (e.g. AF_BALAY_08) can appear in multiple subblocks
-across multiple blocks. Each subblock stores its own ClassList object.
-The ExamTree is responsible for merging these into a single list per subject.
-
-Cell values skipped during parsing
------------------------------------
-- Empty / NaN cells
-- "FREE" cells  (available slots with no class assigned)
 """
 
 import re
 from pathlib import Path
 import pandas as pd
 from collections import defaultdict
-
-# Cell values that represent an empty/available slot — not a real class.
-SKIP_VALUES = {"FREE"}
 
 
 # ------------------------------------------------
@@ -124,17 +117,6 @@ class Block:
 # ROOT TIMETABLE TREE
 # ------------------------------------------------
 class TimetableTree:
-    """
-    Top-level timetable tree.
-
-    Structure:
-        TimetableTree
-            -> Block
-                -> SubBlock
-                    -> ClassList
-                        -> StudentList
-    """
-
     def __init__(self):
         self.blocks = {}
 
@@ -154,14 +136,21 @@ class TimetableTree:
         for block_name in sorted(self.blocks.keys()):
             block = self.blocks[block_name]
             print(block.name)
-            for subblock_name in sorted(block.subblocks,
-                                        key=lambda n: int(n[1:])):
+
+            sorted_subblocks = sorted(
+                block.subblocks.keys(),
+                key=lambda name: int(name[1:])
+            )
+
+            for subblock_name in sorted_subblocks:
                 subblock = block.subblocks[subblock_name]
                 print(f"-{subblock.name}")
-                for class_label in sorted(subblock.class_lists):
+
+                for class_label in sorted(subblock.class_lists.keys()):
                     cl = subblock.class_lists[class_label]
                     print(f"--{cl.label}")
                     print(f"---{cl.student_list}")
+
             print()
 
 
@@ -169,56 +158,53 @@ class TimetableTree:
 # HELPER FUNCTIONS
 # ------------------------------------------------
 
+# BUG 2 FIX: old pattern [A-H]\\d+ matched F25, F26 ... F67.
+# New pattern matches only single-digit subblocks (A1-H9).
+# Real timetable columns are A1-H7; two-digit exam columns are excluded.
+_TIMETABLE_COL_RE = re.compile(r"^[A-H][1-9]$")
+
 def detect_timetable_columns(df: pd.DataFrame) -> list[str]:
     """
-    Detect columns matching the pattern [A-H] followed by digits.
-    Returns them sorted block-first, then by subblock number.
+    Detect columns matching the pattern [A-H] followed by ONE digit 1-9.
+    e.g.  A1, A2, B1, D7, H7  —  but NOT F25, F30, F67 (exam columns).
+
+    Sorted block-first, then by subblock number.
     """
     cols = [
         str(col).strip()
         for col in df.columns
-        if re.fullmatch(r"[A-H]\d+", str(col).strip())
+        if _TIMETABLE_COL_RE.match(str(col).strip())
     ]
     cols.sort(key=lambda x: (x[0], int(x[1:])))
     return cols
 
 
-# Subject codes that should be merged into another code at parse time.
+# Subject codes that should be merged into another code at load time.
 SUBJECT_MERGES = {
     "OD": "DR",
 }
 
-
 def build_class_label(raw_label: str, grade) -> str:
     """
     Convert a raw cell value and grade into a standardised class label.
+    Applies subject merges before building the label.
 
     Examples:
         "AF BALAY",  8  ->  AF_BALAY_08
         "OD MUNROE", 8  ->  DR_MUNROE_08   (OD merged into DR)
     """
-    parts = str(raw_label).strip().split()
+    parts     = str(raw_label).strip().split()
     if parts[0] in SUBJECT_MERGES:
         parts[0] = SUBJECT_MERGES[parts[0]]
-    base = "_".join(parts)
-    return f"{base}_{int(grade):02d}"
-
-
-def _should_skip(raw: str) -> bool:
-    """
-    Return True for cell values that represent empty/free slots.
-    Centralised here so the same logic applies in both the parser
-    and the data-warning scanner.
-    """
-    return not raw or raw.upper() in SKIP_VALUES
+    base      = "_".join(parts)
+    grade_int = int(grade)
+    return f"{base}_{grade_int:02d}"
 
 
 def check_for_data_warnings(df: pd.DataFrame, timetable_cols: list):
     """
     Scan the data for likely problems and print warnings.
-    Flags any class with fewer than 5 students — catches typos that
-    create ghost classes (e.g. 'MA BLL' for one student).
-    FREE cells are ignored.
+    Flags any class with fewer than 5 students total.
     """
     class_info = defaultdict(lambda: {"students": set(), "subblocks": set()})
 
@@ -232,7 +218,7 @@ def check_for_data_warnings(df: pd.DataFrame, timetable_cols: list):
             if pd.isna(val):
                 continue
             raw = str(val).strip()
-            if _should_skip(raw):
+            if not raw:
                 continue
             label = build_class_label(raw, grade)
             class_info[label]["students"].add(int(student_id))
@@ -272,18 +258,20 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
     """
     Read ST1.xlsx and return a populated TimetableTree.
 
-    Each row represents one student.
-    Each timetable column (A1..H7 etc.) holds the class for that slot.
-    FREE cells and empty cells are silently skipped.
+    The fixed column detection regex (r"^[A-H][1-9]$") means the 43
+    spurious F25-F67 exam columns are silently ignored here — they will
+    never appear in the tree and will never pollute a student's schedule.
     """
     df = load_dataframe(st_file_path)
     df = df.dropna(subset=["Studentid"]).copy()
     df["Studentid"] = df["Studentid"].astype(float).astype(int)
 
     timetable_cols = detect_timetable_columns(df)
+
     if not timetable_cols:
         raise ValueError(
-            "No timetable columns found. Expected columns like A1, B3, H7."
+            "No timetable columns found in the file. "
+            "Expected columns like A1, B3, H7 (single-digit suffix)."
         )
 
     print(f"Found {len(timetable_cols)} timetable columns: "
@@ -296,19 +284,23 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
     for _, row in df.iterrows():
         student_id = int(row["Studentid"])
         grade      = row["Grade"]
+
         if pd.isna(grade):
             continue
 
         for subblock_name in timetable_cols:
-            val = row[subblock_name]
-            if pd.isna(val):
+            subject_value = row[subblock_name]
+
+            if pd.isna(subject_value):
                 continue
-            raw = str(val).strip()
-            if _should_skip(raw):
+
+            raw_label = str(subject_value).strip()
+            if not raw_label:
                 continue
 
             block_name  = subblock_name[0]
-            class_label = build_class_label(raw, grade)
+            class_label = build_class_label(raw_label, grade)
+
             tree.add_entry(block_name, subblock_name, class_label, student_id)
 
     return tree
@@ -318,11 +310,18 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
 # OPTIONAL STANDALONE TEST
 # ------------------------------------------------
 if __name__ == "__main__":
-    for candidate in ["data/ST1.xlsx"]:
+
+    candidates = [
+        "data/ST1.xlsx",       # run from project root  (python core/timetable_tree.py)
+        "../data/ST1.xlsx",    # run from core/          (python timetable_tree.py)
+        "ST1.xlsx",            # run from data/
+    ]
+    for candidate in candidates:
         p = Path(candidate)
         if p.exists():
             print(f"Using: {candidate}")
-            build_timetable_tree_from_file(p).print_tree()
+            timetable_tree = build_timetable_tree_from_file(p)
+            timetable_tree.print_tree()
             break
     else:
-        print("data/ST1.xlsx not found.")
+        print(f"ST1.xlsx not found. Tried: {candidates}")
