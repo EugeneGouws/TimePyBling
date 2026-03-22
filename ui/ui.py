@@ -3,7 +3,7 @@ ui.py — TimePyBling main interface
 
 Tabs
 ----
-  Timetable    — browse Block → SubBlock → Class → Students, with live search
+  Timetable    — 8×7 rotation grid; click cell for class detail; view entity timetable popup
   Verification — clash report, data integrity, schedulable pairs
   Exams        — exam slot scheduling + dated exam timetable per grade
 """
@@ -33,6 +33,24 @@ from reader.exam_clash       import (build_clash_graph, dsatur_colouring,
 
 DEFAULT_EXCLUSIONS   = {"ST", "LIB", "PE", "RDI"}
 TEACHER_SUBJECT_COLS = ["sua", "sub", "suc"]
+
+# Rotation timetable grid: 8 days × 7 periods.
+# Each entry is the subblock that falls in that (day, period) slot.
+# Column index == period number; block letter rotates with H as anchor.
+TIMETABLE_GRID = [
+    ["A1","B2","C3","D4","E5","F6","G7"],  # Day 1
+    ["G1","H2","B3","C4","D5","E6","F7"],  # Day 2
+    ["F1","A2","H3","B4","C5","D6","E7"],  # Day 3
+    ["E1","F2","A3","H4","B5","C6","D7"],  # Day 4
+    ["D1","E2","F3","A4","H5","B6","C7"],  # Day 5
+    ["C1","D2","E3","F4","A5","H6","B7"],  # Day 6
+    ["B1","C2","D3","E4","F5","A6","H7"],  # Day 7
+    ["H1","B2","C3","D4","E5","F6","A7"],  # Day 8
+]
+
+CLR_GRID_CELL   = "#f0f4f8"
+CLR_GRID_HEADER = "#dde3ea"
+CLR_GRID_ACTIVE = "#d0e8ff"
 
 DEFAULT_EXAM_START = date(2026, 6, 1)
 DEFAULT_EXAM_END   = date(2026, 6, 23)
@@ -160,6 +178,7 @@ class TimePyBlingApp(tk.Tk):
         self._selected_paper_label = None
         self._sessions             = None
         self.session_count_label   = None
+        self._subblock_popup       = None
 
         # AM / PM session toggles (BUG 6)
         self._am_var = tk.BooleanVar(value=True)
@@ -167,6 +186,7 @@ class TimePyBlingApp(tk.Tk):
 
         self._build_ui()
         self.after(300, self._auto_load)   # BUG 1
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ─────────────────────────────────────────────────────────
     # AUTO-LOAD  (BUG 1)
@@ -241,38 +261,136 @@ class TimePyBlingApp(tk.Tk):
     # ─────────────────────────────────────────────────────────
 
     def _build_timetable_tab(self):
-        search_bar = tk.Frame(self.tab_timetable, bg=CLR_WHITE, pady=6, padx=8)
-        search_bar.pack(fill=tk.X)
+        pane = tk.PanedWindow(self.tab_timetable, orient=tk.HORIZONTAL,
+                              bg="#ccc", sashwidth=5)
+        pane.pack(fill=tk.BOTH, expand=True)
 
-        tk.Label(search_bar, text="Search:", bg=CLR_WHITE,
+        # ══════════════════════════════════════════════════════════
+        # LEFT — main 8×7 rotation grid
+        # ══════════════════════════════════════════════════════════
+        left = tk.Frame(pane, bg=CLR_WHITE)
+        pane.add(left, minsize=280)
+
+        canvas = tk.Canvas(left, bg=CLR_WHITE, highlightthickness=0)
+        vsb = ttk.Scrollbar(left, orient=tk.VERTICAL, command=canvas.yview)
+        hsb = ttk.Scrollbar(left, orient=tk.HORIZONTAL, command=canvas.xview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self._grid_frame = tk.Frame(canvas, bg=CLR_WHITE)
+        canvas.create_window((0, 0), window=self._grid_frame, anchor="nw")
+        self._grid_frame.bind("<Configure>",
+                              lambda e: canvas.configure(
+                                  scrollregion=canvas.bbox("all")))
+
+        # Column headers
+        tk.Label(self._grid_frame, text="", bg=CLR_GRID_HEADER,
+                 width=3, relief=tk.RIDGE, bd=1
+                 ).grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        for col in range(7):
+            tk.Label(self._grid_frame, text=f"P{col+1}",
+                     bg=CLR_GRID_HEADER, font=("Helvetica", 8, "bold"),
+                     width=4, relief=tk.RIDGE, bd=1
+                     ).grid(row=0, column=col+1, sticky="nsew", padx=0, pady=0)
+
+        # Row headers + subblock buttons
+        self._grid_cells = []
+        for day in range(8):
+            tk.Label(self._grid_frame, text=f"D{day+1}",
+                     bg=CLR_GRID_HEADER, font=("Helvetica", 8, "bold"),
+                     width=3, relief=tk.RIDGE, bd=1
+                     ).grid(row=day+1, column=0, sticky="nsew", padx=0, pady=0)
+            row_cells = []
+            for col in range(7):
+                subblock = TIMETABLE_GRID[day][col]
+                btn = tk.Button(
+                    self._grid_frame,
+                    text=subblock,
+                    font=("Helvetica", 8, "bold"),
+                    bg=CLR_GRID_CELL,
+                    relief=tk.RIDGE, bd=1,
+                    width=4, pady=2, padx=0,
+                    command=lambda sb=subblock: self._show_subblock_detail(sb),
+                )
+                btn.grid(row=day+1, column=col+1, sticky="nsew", padx=0, pady=0)
+                row_cells.append(btn)
+            self._grid_cells.append(row_cells)
+
+        # ══════════════════════════════════════════════════════════
+        # RIGHT — entity timetable viewer (embedded, not a popup)
+        # ══════════════════════════════════════════════════════════
+        right = tk.Frame(pane, bg=CLR_WHITE)
+        pane.add(right, minsize=420)
+
+        # ── selector bar ──────────────────────────────────────────
+        sel = tk.Frame(right, bg=CLR_WHITE, padx=8, pady=6)
+        sel.pack(fill=tk.X)
+
+        tk.Label(sel, text="View:", bg=CLR_WHITE,
                  font=("Helvetica", 10)).pack(side=tk.LEFT)
 
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._on_search_change)
-        tk.Entry(search_bar, textvariable=self.search_var,
-                 font=("Helvetica", 10), width=30,
-                 relief=tk.SOLID, bd=1).pack(side=tk.LEFT, padx=6)
+        self._entity_type_var = tk.StringVar(value="Student")
+        entity_type_cb = ttk.Combobox(sel, textvariable=self._entity_type_var,
+                                      values=["Student", "Teacher", "Subject"],
+                                      state="readonly", width=10,
+                                      font=("Helvetica", 10))
+        entity_type_cb.pack(side=tk.LEFT, padx=(4, 8))
+        entity_type_cb.bind("<<ComboboxSelected>>", self._on_entity_type_change)
 
-        tk.Label(search_bar,
-                 text="student ID · subject code · teacher name",
-                 bg=CLR_WHITE, fg="#888",
-                 font=("Helvetica", 9)).pack(side=tk.LEFT)
+        self._entity_value_var = tk.StringVar()
+        self._entity_search_entry = tk.Entry(sel,
+                                             textvariable=self._entity_value_var,
+                                             width=20, font=("Helvetica", 10),
+                                             relief=tk.SOLID, bd=1)
+        self._entity_search_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self._entity_value_var.trace_add("write", self._on_entity_search_change)
 
-        tk.Button(search_bar, text="Clear",
-                  command=lambda: self.search_var.set(""),
-                  relief=tk.FLAT, bg=CLR_LIGHT,
-                  font=("Helvetica", 9), padx=8).pack(side=tk.LEFT, padx=4)
+        tk.Button(sel, text="View Timetable",
+                  command=self._on_view_timetable,
+                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 9, "bold"), padx=10
+                  ).pack(side=tk.LEFT)
 
-        tree_frame = tk.Frame(self.tab_timetable, bg=CLR_WHITE)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        # ── options list (updates while typing) ───────────────────
+        list_frame = tk.Frame(right, bg=CLR_WHITE)
+        list_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
-        self.tt_tree = ttk.Treeview(tree_frame, show="tree")
-        sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL,
-                           command=self.tt_tree.yview)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tt_tree.configure(yscrollcommand=sb.set)
-        self.tt_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._style_tree(self.tt_tree)
+        self._entity_listbox = tk.Listbox(list_frame, height=5,
+                                           font=("Courier", 9),
+                                           relief=tk.SOLID, bd=1,
+                                           selectmode=tk.SINGLE)
+        list_sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL,
+                                command=self._entity_listbox.yview)
+        list_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._entity_listbox.config(yscrollcommand=list_sb.set)
+        self._entity_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._entity_listbox.bind("<<ListboxSelect>>",
+                                  self._on_entity_listbox_select)
+
+        # ── entity heading ────────────────────────────────────────
+        self._entity_heading_var = tk.StringVar()
+        tk.Label(right, textvariable=self._entity_heading_var,
+                 bg=CLR_WHITE, font=("Helvetica", 11, "bold")
+                 ).pack(padx=8, pady=(4, 2))
+
+        # ── entity timetable grid (embedded) ─────────────────────
+        entity_canvas = tk.Canvas(right, bg=CLR_WHITE, highlightthickness=0)
+        evsb = ttk.Scrollbar(right, orient=tk.VERTICAL,
+                              command=entity_canvas.yview)
+        evsb.pack(side=tk.RIGHT, fill=tk.Y)
+        entity_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                           padx=8, pady=(0, 8))
+        entity_canvas.configure(yscrollcommand=evsb.set)
+
+        self._entity_grid_frame = tk.Frame(entity_canvas, bg=CLR_WHITE)
+        entity_canvas.create_window((0, 0), window=self._entity_grid_frame,
+                                    anchor="nw")
+        self._entity_grid_frame.bind(
+            "<Configure>",
+            lambda e: entity_canvas.configure(
+                scrollregion=entity_canvas.bbox("all")))
 
     # ─────────────────────────────────────────────────────────
     # TAB 2 — VERIFICATION  (BUG 2 + BUG 3)
@@ -604,7 +722,7 @@ class TimePyBlingApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Load Error", str(e))
             return
-        self._populate_timetable_tree()
+        self._populate_timetable_grid()
         self._rebuild_exam()
         self._run_verification()
         self.notebook.select(self.tab_verification)
@@ -739,41 +857,199 @@ class TimePyBlingApp(tk.Tk):
                 _write(w, f"    Students:  {info['students']}\n", "dim")
 
     # ─────────────────────────────────────────────────────────
-    # TIMETABLE TREE
+    # TIMETABLE GRID
     # ─────────────────────────────────────────────────────────
 
-    def _populate_timetable_tree(self, filter_text=""):
-        self.tt_tree.delete(*self.tt_tree.get_children())
+    def _populate_timetable_grid(self):
+        """Refresh grid cell colours; no content change — buttons always show subblock name."""
+        for day in range(8):
+            for col in range(7):
+                self._grid_cells[day][col].config(bg=CLR_GRID_CELL)
+        self._refresh_entity_listbox()
+
+    # ─────────────────────────────────────────────────────────
+    # TIMETABLE GRID — DATA HELPERS & ENTITY SELECTOR
+    # ─────────────────────────────────────────────────────────
+
+    def _all_students(self) -> list:
+        students = set()
+        for block in self.timetable_tree.blocks.values():
+            for subblock in block.subblocks.values():
+                for cl in subblock.class_lists.values():
+                    students |= cl.student_list.students
+        return sorted(students)
+
+    def _all_teachers(self) -> list:
+        teachers = set()
+        for block in self.timetable_tree.blocks.values():
+            for subblock in block.subblocks.values():
+                for label in subblock.class_lists:
+                    parts = label.split("_")
+                    if len(parts) >= 3:
+                        teachers.add("_".join(parts[1:-1]))
+        return sorted(teachers)
+
+    def _all_subjects(self) -> list:
+        subjects = set()
+        for block in self.timetable_tree.blocks.values():
+            for subblock in block.subblocks.values():
+                for label in subblock.class_lists:
+                    subjects.add(label.split("_")[0])
+        return sorted(subjects)
+
+    def _on_entity_type_change(self, *_):
+        self._entity_value_var.set("")
+        self._refresh_entity_listbox()
+
+    def _on_entity_search_change(self, *_):
+        self._refresh_entity_listbox()
+
+    def _entity_full_list(self) -> list:
+        if not self.timetable_tree:
+            return []
+        etype = self._entity_type_var.get()
+        if etype == "Student":
+            return [str(s) for s in self._all_students()]
+        elif etype == "Teacher":
+            return self._all_teachers()
+        return self._all_subjects()
+
+    def _refresh_entity_listbox(self):
+        """Update the options listbox based on typed text; focus stays in entry."""
+        typed = self._entity_value_var.get().strip().lower()
+        full  = self._entity_full_list()
+        filtered = [v for v in full if typed in v.lower()] if typed else full
+        self._entity_listbox.delete(0, tk.END)
+        for v in filtered:
+            self._entity_listbox.insert(tk.END, v)
+
+    def _on_entity_listbox_select(self, *_):
+        sel = self._entity_listbox.curselection()
+        if sel:
+            value = self._entity_listbox.get(sel[0])
+            self._entity_value_var.set(value)
+            self._refresh_entity_grid(self._entity_type_var.get(), value)
+
+    def _on_view_timetable(self):
+        etype = self._entity_type_var.get()
+        value = self._entity_value_var.get().strip()
+        if not value or not self.timetable_tree:
+            return
+        self._refresh_entity_grid(etype, value)
+
+    def _show_subblock_detail(self, subblock_name: str):
+        """Open a small popup listing all classes in a subblock (one at a time)."""
         if not self.timetable_tree:
             return
-        ft = filter_text.strip().lower()
-        for block_name in sorted(self.timetable_tree.blocks.keys()):
-            block      = self.timetable_tree.blocks[block_name]
-            block_node = self.tt_tree.insert("", tk.END,
-                                             text=f"Block {block_name}",
-                                             open=bool(ft))
-            for sb_name in sorted(block.subblocks, key=lambda n: int(n[1:])):
-                subblock = block.subblocks[sb_name]
-                sb_node  = None
-                for class_label in sorted(subblock.class_lists):
-                    cl = subblock.class_lists[class_label]
-                    if ft and not (ft in class_label.lower() or
-                                   ft in str(cl.student_list.get_sorted())):
-                        continue
-                    if sb_node is None:
-                        sb_node = self.tt_tree.insert(block_node, tk.END,
-                                                       text=sb_name,
-                                                       open=bool(ft))
-                    count   = len(cl.student_list)
-                    cl_node = self.tt_tree.insert(sb_node, tk.END,
-                                                   text=f"{class_label}  ({count} students)")
-                    students = cl.student_list.get_sorted()
-                    for i in range(0, len(students), 20):
-                        self.tt_tree.insert(cl_node, tk.END,
-                                             text=str(students[i:i + 20]))
+        if self._subblock_popup and self._subblock_popup.winfo_exists():
+            self._subblock_popup.destroy()
 
-    def _on_search_change(self, *args):
-        self._populate_timetable_tree(filter_text=self.search_var.get())
+        block_letter = subblock_name[0]
+        block = self.timetable_tree.blocks.get(block_letter)
+        if not block:
+            return
+        sb = block.subblocks.get(subblock_name)
+
+        win = tk.Toplevel(self)
+        self._subblock_popup = win
+        win.title(f"Subblock {subblock_name}")
+        win.configure(bg=CLR_WHITE)
+        win.resizable(True, True)
+
+        tk.Label(win, text=f"Classes in {subblock_name}",
+                 font=("Helvetica", 11, "bold"),
+                 bg=CLR_WHITE).pack(padx=14, pady=(10, 4))
+
+        frame = tk.Frame(win, bg=CLR_WHITE)
+        frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 4))
+
+        if not sb or not sb.class_lists:
+            tk.Label(frame, text="(no classes)", fg="#888",
+                     bg=CLR_WHITE, font=("Helvetica", 9)).pack()
+        else:
+            for label in sorted(sb.class_lists):
+                cl = sb.class_lists[label]
+                count = len(cl.student_list)
+                tk.Label(frame, text=f"  {label}   ({count} students)",
+                         bg=CLR_WHITE, font=("Courier", 9),
+                         anchor="w").pack(fill=tk.X)
+
+        tk.Button(win, text="Close", command=win.destroy,
+                  bg=CLR_LIGHT, relief=tk.FLAT,
+                  font=("Helvetica", 9), padx=12
+                  ).pack(pady=(0, 10))
+
+    def _refresh_entity_grid(self, entity_type: str, value: str):
+        """Rebuild the embedded entity timetable grid on the right panel."""
+        for w in self._entity_grid_frame.winfo_children():
+            w.destroy()
+
+        self._entity_heading_var.set(f"{entity_type}: {value}")
+
+        gf = self._entity_grid_frame
+
+        # Column headers
+        tk.Label(gf, text="", bg=CLR_GRID_HEADER,
+                 width=8, relief=tk.RIDGE, bd=1
+                 ).grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
+        for col in range(7):
+            tk.Label(gf, text=f"P{col+1}",
+                     bg=CLR_GRID_HEADER, font=("Helvetica", 9, "bold"),
+                     width=18, relief=tk.RIDGE, bd=1
+                     ).grid(row=0, column=col+1, padx=1, pady=1, sticky="nsew")
+
+        for day in range(8):
+            tk.Label(gf, text=f"Day {day+1}",
+                     bg=CLR_GRID_HEADER, font=("Helvetica", 9, "bold"),
+                     width=8, relief=tk.RIDGE, bd=1
+                     ).grid(row=day+1, column=0, padx=1, pady=1, sticky="nsew")
+            for col in range(7):
+                subblock_name = TIMETABLE_GRID[day][col]
+                block_letter  = subblock_name[0]
+                block = self.timetable_tree.blocks.get(block_letter)
+                matching = []
+                if block:
+                    sb = block.subblocks.get(subblock_name)
+                    if sb:
+                        for label, cl in sb.class_lists.items():
+                            parts = label.split("_")
+                            if entity_type == "Student":
+                                try:
+                                    sid = int(value)
+                                except ValueError:
+                                    sid = None
+                                if sid is not None and sid in cl.student_list.students:
+                                    matching.append(label)
+                            elif entity_type == "Teacher":
+                                teacher = "_".join(parts[1:-1]) if len(parts) >= 3 else ""
+                                if teacher == value:
+                                    matching.append(label)
+                            else:  # Subject
+                                if parts[0] == value:
+                                    matching.append(label)
+
+                def _fmt(lbl):
+                    p = lbl.split("_")
+                    subj  = p[0]
+                    grade = p[-1]
+                    tchr  = "_".join(p[1:-1]) if len(p) >= 3 else ""
+                    if entity_type == "Teacher":
+                        return f"{subj}  Gr{grade}"
+                    elif entity_type == "Student":
+                        return f"{subj}  {tchr}"
+                    else:  # Subject
+                        return f"{subj}  {tchr}  Gr{grade}"
+
+                cell_text = "\n".join(_fmt(lbl) for lbl in matching) if matching else ""
+                cell_bg   = CLR_GRID_ACTIVE if matching else CLR_GRID_CELL
+                tk.Label(gf,
+                         text=cell_text,
+                         bg=cell_bg,
+                         font=("Courier", 8),
+                         width=18, wraplength=140,
+                         justify=tk.CENTER,
+                         relief=tk.RIDGE, bd=1, pady=4
+                         ).grid(row=day+1, column=col+1, padx=1, pady=1, sticky="nsew")
 
     # ─────────────────────────────────────────────────────────
     # EXAM TREE  (BUG 4)
@@ -1124,13 +1400,7 @@ class TimePyBlingApp(tk.Tk):
     # IMPORT / EXPORT EXAM STATE  (BUG 5)
     # ─────────────────────────────────────────────────────────
 
-    def _export_exam_state(self):
-        path = filedialog.asksaveasfilename(
-            title="Save timetable state",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-        if not path:
-            return
+    def _build_state_dict(self) -> dict:
         papers_data: dict[str, list[str]] = {}
         if self.paper_registry:
             for grade in self.paper_registry.grades():
@@ -1139,7 +1409,7 @@ class TimePyBlingApp(tk.Tk):
                     ps = self.paper_registry.papers_for_subject_grade(subj, grade)
                     papers_data[f"{subj}_{grade_num}"] = [
                         f"P{p.paper_number}" for p in ps]
-        data = {
+        return {
             "timetable_tree": (timetable_tree_to_dict(self.timetable_tree)
                                if self.timetable_tree else None),
             "exclusions": sorted(self.exclusions),
@@ -1151,12 +1421,78 @@ class TimePyBlingApp(tk.Tk):
                 "pm":    self._pm_var.get(),
             },
         }
+
+    def _save_state_json(self, path) -> bool:
+        """Write current state to path. Returns True on success."""
         try:
             with open(path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2)
-            messagebox.showinfo("Saved", f"State saved to:\n{path}")
+                json.dump(self._build_state_dict(), fh, indent=2)
+            return True
         except Exception as e:
             messagebox.showerror("Save Error", str(e))
+            return False
+
+    def _export_exam_state(self):
+        path = filedialog.asksaveasfilename(
+            title="Save timetable state",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        if self._save_state_json(path):
+            messagebox.showinfo("Saved", f"State saved to:\n{path}")
+
+    def _on_close(self):
+        """Prompt to save before exit; always saves to the default auto-load path."""
+        if not self.timetable_tree:
+            self.destroy()
+            return
+
+        DEFAULT_PATH = Path("data/timetable_state.json")
+
+        win = tk.Toplevel(self)
+        win.title("Save before exit?")
+        win.configure(bg=CLR_WHITE)
+        win.resizable(False, False)
+        win.grab_set()
+        win.focus_force()
+
+        tk.Label(win,
+                 text="Save current timetable and exam state\nbefore closing?",
+                 bg=CLR_WHITE, font=("Helvetica", 10),
+                 justify=tk.CENTER).pack(padx=24, pady=(18, 12))
+
+        btn_row = tk.Frame(win, bg=CLR_WHITE)
+        btn_row.pack(padx=24, pady=(0, 18))
+
+        def save_and_exit():
+            win.destroy()
+            DEFAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if self._save_state_json(DEFAULT_PATH):
+                self.destroy()
+
+        def exit_no_save():
+            win.destroy()
+            self.destroy()
+
+        def cancel():
+            win.destroy()
+
+        tk.Button(btn_row, text="Save & Exit",
+                  command=save_and_exit,
+                  bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 9, "bold"), padx=12
+                  ).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_row, text="Exit without saving",
+                  command=exit_no_save,
+                  bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Helvetica", 9), padx=12
+                  ).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_row, text="Cancel",
+                  command=cancel,
+                  bg=CLR_LIGHT, relief=tk.FLAT,
+                  font=("Helvetica", 9), padx=12
+                  ).pack(side=tk.LEFT, padx=4)
 
     def _import_exam_state(self):
         path = filedialog.askopenfilename(
@@ -1192,7 +1528,7 @@ class TimePyBlingApp(tk.Tk):
                     data["timetable_tree"])
                 self.st1_path = None
                 self.st1_label.config(text=source_label, fg=CLR_WHITE)
-                self._populate_timetable_tree()
+                self._populate_timetable_grid()
             except Exception as e:
                 messagebox.showerror("Load Error",
                                      f"Could not restore timetable:\n{e}")
@@ -1239,7 +1575,6 @@ class TimePyBlingApp(tk.Tk):
         self._populate_exam_tree()
         self._run_verification()
         self._update_session_count_label()
-        self.notebook.select(self.tab_verification)
 
     # ─────────────────────────────────────────────────────────
     # EXAM COST FUNCTION  (BUG 3 — exam tab)
@@ -1748,33 +2083,20 @@ class TimePyBlingApp(tk.Tk):
     def _save_schedule_export(self, top, grades, grid, slot_meta, all_slots):
         try:
             import reportlab  # noqa: F401
-            has_reportlab = True
         except ImportError:
-            has_reportlab = False
-
-        if has_reportlab:
-            path = filedialog.asksaveasfilename(
-                parent=top, title="Save exam schedule as PDF",
-                defaultextension=".pdf",
-                filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")])
-            if not path:
-                return
-            self._save_schedule_pdf(path, grades, grid, slot_meta, all_slots)
-            messagebox.showinfo("Saved", f"Schedule saved as PDF:\n{path}", parent=top)
-        else:
-            path = filedialog.asksaveasfilename(
-                parent=top,
-                title="Save exam schedule as text  (install reportlab for PDF)",
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
-            if not path:
-                return
-            self._save_schedule_txt(path, grades, grid, slot_meta, all_slots)
-            messagebox.showinfo(
-                "Saved",
-                f"Schedule saved as text:\n{path}\n\n"
-                "Tip: pip install reportlab for PDF export.",
+            messagebox.showerror(
+                "PDF export unavailable",
+                "reportlab is not installed.\n\nRun:  pip install reportlab",
                 parent=top)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=top, title="Save exam schedule as PDF",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")])
+        if not path:
+            return
+        self._save_schedule_pdf(path, grades, grid, slot_meta, all_slots)
+        messagebox.showinfo("Saved", f"Schedule saved as PDF:\n{path}", parent=top)
 
     def _save_schedule_pdf(self, path, grades, grid, slot_meta, all_slots):
         try:
@@ -1821,21 +2143,6 @@ class TimePyBlingApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("PDF Error", f"Failed to write PDF:\n{e}")
 
-    def _save_schedule_txt(self, path, grades, grid, slot_meta, all_slots):
-        col_w = 14
-        header = f"{'Slot / Date / Sess':<26}" + "".join(
-            f"{g:<{col_w}}" for g in grades)
-        lines = [header, "-" * len(header)]
-        for slot_idx in all_slots:
-            d, session = slot_meta[slot_idx]
-            label = f"Slot {slot_idx+1}  {d.strftime('%a %d %b')}  {session}"
-            row = f"{label:<26}"
-            for grade in grades:
-                subjects = sorted(grid[slot_idx][grade])
-                row += f"{', '.join(subjects) if subjects else '':<{col_w}}"
-            lines.append(row)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines))
 
     # ─────────────────────────────────────────────────────────
     # STYLING
