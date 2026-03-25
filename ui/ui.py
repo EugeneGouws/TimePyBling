@@ -48,23 +48,25 @@ TIMETABLE_GRID = [
     ["H1","B2","C3","D4","E5","F6","A7"],  # Day 8
 ]
 
-CLR_GRID_CELL   = "#f0f4f8"
-CLR_GRID_HEADER = "#dde3ea"
-CLR_GRID_ACTIVE = "#d0e8ff"
+CLR_GRID_CELL   = "#FFFBF5"   # warm cream
+CLR_GRID_HEADER = "#DBEAFE"   # soft blue
+CLR_GRID_ACTIVE = "#FED7AA"   # orange highlight
 
 DEFAULT_EXAM_START = date(2026, 6, 1)
 DEFAULT_EXAM_END   = date(2026, 6, 23)
 
-CLR_HEADER   = "#2c3e50"
-CLR_GREEN    = "#27ae60"
-CLR_BLUE     = "#2980b9"
-CLR_RED      = "#c0392b"
-CLR_LIGHT    = "#ecf0f1"
-CLR_MID      = "#bdc3c7"
-CLR_WHITE    = "white"
-CLR_BG       = "#f5f5f5"
-CLR_MORNING  = "#e8f5e9"
-CLR_AFTERNOON= "#fff8e1"
+CLR_HEADER    = "#1E3A5F"   # deep navy
+CLR_ORANGE    = "#EA6C0A"   # primary orange (dark enough on white)
+CLR_BLUE      = "#1D5CB4"   # primary blue
+CLR_PINK      = "#C2185B"   # deep pink (readable on white/light)
+CLR_GREEN     = "#16A34A"   # keep green for pass/generate
+CLR_RED       = "#DC2626"   # keep red for fail/remove
+CLR_LIGHT     = "#EFF6FF"   # very light blue
+CLR_MID       = "#93C5FD"   # mid blue
+CLR_WHITE     = "white"
+CLR_BG        = "#F0F4FF"   # faint blue background
+CLR_MORNING   = "#FFF3E0"   # AM — soft amber/orange
+CLR_AFTERNOON = "#FCE4EC"   # PM — soft pink
 
 
 # ─────────────────────────────────────────────────────────────
@@ -76,8 +78,8 @@ def _scrolled_text(parent, **kw) -> tk.Text:
     frame.pack(fill=tk.BOTH, expand=True)
     sb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
     sb.pack(side=tk.RIGHT, fill=tk.Y)
-    t = tk.Text(frame, font=("Courier", 9), relief=tk.FLAT,
-                bg="#f8f8f8", state=tk.DISABLED, wrap=tk.NONE,
+    t = tk.Text(frame, font=("Calibri", 10), relief=tk.FLAT,
+                bg="#F8F9FF", state=tk.DISABLED, wrap=tk.WORD,
                 yscrollcommand=sb.set, **kw)
     t.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     sb.config(command=t.yview)
@@ -219,25 +221,59 @@ class TimePyBlingApp(tk.Tk):
     # ─────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        self._apply_theme()
         self._build_topbar()
         self._build_notebook()
+
+    def _apply_theme(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TNotebook",
+                         background=CLR_BG, borderwidth=0)
+        style.configure("TNotebook.Tab",
+                         font=("Calibri", 11),
+                         padding=[14, 6],
+                         background=CLR_LIGHT,
+                         foreground="#1E293B")
+        style.map("TNotebook.Tab",
+                  background=[("selected", CLR_ORANGE)],
+                  foreground=[("selected", CLR_WHITE)])
+        style.configure("Treeview",
+                         font=("Calibri", 10), rowheight=26,
+                         background=CLR_WHITE,
+                         fieldbackground=CLR_WHITE,
+                         foreground="#1E293B")
+        style.configure("Treeview.Heading",
+                         font=("Calibri", 11, "bold"),
+                         background=CLR_GRID_HEADER,
+                         foreground="#1E293B")
+        style.map("Treeview",
+                  background=[("selected", CLR_BLUE)],
+                  foreground=[("selected", CLR_WHITE)])
+        style.configure("TCombobox",
+                         font=("Calibri", 10),
+                         selectbackground=CLR_BLUE,
+                         fieldbackground=CLR_WHITE)
+        style.configure("TScrollbar",
+                         background=CLR_MID,
+                         troughcolor=CLR_LIGHT)
 
     def _build_topbar(self):
         bar = tk.Frame(self, bg=CLR_HEADER, pady=8, padx=10)
         bar.pack(fill=tk.X)
 
         tk.Label(bar, text="TimePyBling",
-                 font=("Helvetica", 14, "bold"),
+                 font=("Calibri", 15, "bold"),
                  bg=CLR_HEADER, fg=CLR_WHITE).pack(side=tk.LEFT, padx=(0, 24))
 
         tk.Button(bar, text="Load Timetable", command=self._load_st1,
-                  bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10, pady=3).pack(side=tk.LEFT)
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=12, pady=4).pack(side=tk.LEFT)
 
         self.st1_label = tk.Label(bar, text="No timetable loaded",
                                    bg=CLR_HEADER, fg=CLR_MID,
-                                   font=("Helvetica", 9))
-        self.st1_label.pack(side=tk.LEFT, padx=(6, 20))
+                                   font=("Calibri", 10))
+        self.st1_label.pack(side=tk.LEFT, padx=(8, 20))
 
 
     def _build_notebook(self):
@@ -285,36 +321,41 @@ class TimePyBlingApp(tk.Tk):
                               lambda e: canvas.configure(
                                   scrollregion=canvas.bbox("all")))
 
+        # Make all columns stretch equally
+        for c in range(8):
+            self._grid_frame.columnconfigure(c, weight=1)
+
         # Column headers
         tk.Label(self._grid_frame, text="", bg=CLR_GRID_HEADER,
-                 width=3, relief=tk.RIDGE, bd=1
-                 ).grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+                 relief=tk.RIDGE, bd=1, padx=8, pady=4
+                 ).grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         for col in range(7):
             tk.Label(self._grid_frame, text=f"P{col+1}",
-                     bg=CLR_GRID_HEADER, font=("Helvetica", 8, "bold"),
-                     width=4, relief=tk.RIDGE, bd=1
-                     ).grid(row=0, column=col+1, sticky="nsew", padx=0, pady=0)
+                     bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
+                     fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
+                     ).grid(row=0, column=col+1, sticky="nsew", padx=1, pady=1)
 
         # Row headers + subblock buttons
         self._grid_cells = []
         for day in range(8):
             tk.Label(self._grid_frame, text=f"D{day+1}",
-                     bg=CLR_GRID_HEADER, font=("Helvetica", 8, "bold"),
-                     width=3, relief=tk.RIDGE, bd=1
-                     ).grid(row=day+1, column=0, sticky="nsew", padx=0, pady=0)
+                     bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
+                     fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
+                     ).grid(row=day+1, column=0, sticky="nsew", padx=1, pady=1)
             row_cells = []
             for col in range(7):
                 subblock = TIMETABLE_GRID[day][col]
                 btn = tk.Button(
                     self._grid_frame,
                     text=subblock,
-                    font=("Helvetica", 8, "bold"),
+                    font=("Calibri", 10, "bold"),
                     bg=CLR_GRID_CELL,
+                    fg="#1E293B",
                     relief=tk.RIDGE, bd=1,
-                    width=4, pady=2, padx=0,
+                    padx=10, pady=6,
                     command=lambda sb=subblock: self._show_subblock_detail(sb),
                 )
-                btn.grid(row=day+1, column=col+1, sticky="nsew", padx=0, pady=0)
+                btn.grid(row=day+1, column=col+1, sticky="nsew", padx=1, pady=1)
                 row_cells.append(btn)
             self._grid_cells.append(row_cells)
 
@@ -329,20 +370,20 @@ class TimePyBlingApp(tk.Tk):
         sel.pack(fill=tk.X)
 
         tk.Label(sel, text="View:", bg=CLR_WHITE,
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
+                 font=("Calibri", 11), fg="#1E293B").pack(side=tk.LEFT)
 
         self._entity_type_var = tk.StringVar(value="Student")
         entity_type_cb = ttk.Combobox(sel, textvariable=self._entity_type_var,
                                       values=["Student", "Teacher", "Subject"],
                                       state="readonly", width=10,
-                                      font=("Helvetica", 10))
+                                      font=("Calibri", 11))
         entity_type_cb.pack(side=tk.LEFT, padx=(4, 8))
         entity_type_cb.bind("<<ComboboxSelected>>", self._on_entity_type_change)
 
         self._entity_value_var = tk.StringVar()
         self._entity_search_entry = tk.Entry(sel,
                                              textvariable=self._entity_value_var,
-                                             width=20, font=("Helvetica", 10),
+                                             width=22, font=("Calibri", 11),
                                              relief=tk.SOLID, bd=1)
         self._entity_search_entry.pack(side=tk.LEFT, padx=(0, 6))
         self._entity_value_var.trace_add("write", self._on_entity_search_change)
@@ -350,7 +391,7 @@ class TimePyBlingApp(tk.Tk):
         tk.Button(sel, text="View Timetable",
                   command=self._on_view_timetable,
                   bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10
+                  font=("Calibri", 11, "bold"), padx=12, pady=3
                   ).pack(side=tk.LEFT)
 
         # ── options list (updates while typing) ───────────────────
@@ -358,8 +399,11 @@ class TimePyBlingApp(tk.Tk):
         list_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         self._entity_listbox = tk.Listbox(list_frame, height=5,
-                                           font=("Courier", 9),
+                                           font=("Calibri", 11),
                                            relief=tk.SOLID, bd=1,
+                                           bg=CLR_WHITE,
+                                           selectbackground=CLR_ORANGE,
+                                           selectforeground=CLR_WHITE,
                                            selectmode=tk.SINGLE)
         list_sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL,
                                 command=self._entity_listbox.yview)
@@ -372,7 +416,8 @@ class TimePyBlingApp(tk.Tk):
         # ── entity heading ────────────────────────────────────────
         self._entity_heading_var = tk.StringVar()
         tk.Label(right, textvariable=self._entity_heading_var,
-                 bg=CLR_WHITE, font=("Helvetica", 11, "bold")
+                 bg=CLR_WHITE, font=("Calibri", 12, "bold"),
+                 fg=CLR_BLUE
                  ).pack(padx=8, pady=(4, 2))
 
         # ── entity timetable grid (embedded) ─────────────────────
@@ -408,20 +453,24 @@ class TimePyBlingApp(tk.Tk):
         hdr = tk.Frame(left, bg=CLR_WHITE)
         hdr.pack(fill=tk.X, padx=8, pady=(8, 2))
         tk.Label(hdr, text="Clashes  &  Schedulable Pairs", bg=CLR_WHITE,
-                 font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Calibri", 12, "bold"), fg="#1E293B").pack(side=tk.LEFT)
         tk.Button(hdr, text="Re-run", command=self._run_verification,
-                  bg=CLR_LIGHT, font=("Helvetica", 8),
-                  relief=tk.FLAT, padx=8).pack(side=tk.RIGHT)
+                  bg=CLR_LIGHT, fg="#1E293B", font=("Calibri", 10),
+                  relief=tk.FLAT, padx=10).pack(side=tk.RIGHT)
 
         report_frame = tk.Frame(left, bg=CLR_WHITE)
         report_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         self.clash_report = _scrolled_text(report_frame)
-        self.clash_report.tag_config("pass",    foreground=CLR_GREEN)
-        self.clash_report.tag_config("fail",    foreground=CLR_RED)
-        self.clash_report.tag_config("heading", foreground="#333",
-                                     font=("Courier", 9, "bold"))
-        self.clash_report.tag_config("warn",    foreground="#e67e22")
-        self.clash_report.tag_config("dim",     foreground="#888")
+        self.clash_report.tag_config("pass",    foreground=CLR_GREEN,
+                                     font=("Calibri", 10, "bold"))
+        self.clash_report.tag_config("fail",    foreground=CLR_RED,
+                                     font=("Calibri", 10))
+        self.clash_report.tag_config("heading", foreground=CLR_BLUE,
+                                     font=("Calibri", 11, "bold"))
+        self.clash_report.tag_config("warn",    foreground=CLR_ORANGE,
+                                     font=("Calibri", 10))
+        self.clash_report.tag_config("dim",     foreground="#6B7280",
+                                     font=("Calibri", 10))
 
         # Right: Data Integrity
         right = tk.Frame(pane, bg=CLR_WHITE)
@@ -430,16 +479,19 @@ class TimePyBlingApp(tk.Tk):
         di_hdr = tk.Frame(right, bg=CLR_WHITE)
         di_hdr.pack(fill=tk.X, padx=8, pady=(8, 2))
         tk.Label(di_hdr, text="Data Integrity", bg=CLR_WHITE,
-                 font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Calibri", 12, "bold"), fg="#1E293B").pack(side=tk.LEFT)
 
         di_frame = tk.Frame(right, bg=CLR_WHITE)
         di_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         self.integrity_report = _scrolled_text(di_frame)
-        self.integrity_report.tag_config("pass",    foreground=CLR_GREEN)
-        self.integrity_report.tag_config("heading", foreground="#333",
-                                          font=("Courier", 9, "bold"))
-        self.integrity_report.tag_config("warn",    foreground="#e67e22")
-        self.integrity_report.tag_config("dim",     foreground="#888")
+        self.integrity_report.tag_config("pass",    foreground=CLR_GREEN,
+                                          font=("Calibri", 10, "bold"))
+        self.integrity_report.tag_config("heading", foreground=CLR_BLUE,
+                                          font=("Calibri", 11, "bold"))
+        self.integrity_report.tag_config("warn",    foreground=CLR_ORANGE,
+                                          font=("Calibri", 10))
+        self.integrity_report.tag_config("dim",     foreground="#6B7280",
+                                          font=("Calibri", 10))
 
     # ─────────────────────────────────────────────────────────
     # TAB 3 — EXAMS  (BUG 4 + 5 + 6)
@@ -457,17 +509,17 @@ class TimePyBlingApp(tk.Tk):
         left_top = tk.Frame(left, bg=CLR_WHITE)
         left_top.pack(fill=tk.X, padx=6, pady=(6, 0))
         tk.Label(left_top, text="Exam Tree", bg=CLR_WHITE,
-                 font=("Helvetica", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Calibri", 12, "bold"), fg="#1E293B").pack(side=tk.LEFT)
 
         tk.Button(left_top, text="Save State…", command=self._export_exam_state,
-                  bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=(2, 0))
+                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10), padx=8).pack(side=tk.RIGHT, padx=(2, 0))
         tk.Button(left_top, text="Load State…", command=self._import_exam_state,
-                  bg="#666", fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6).pack(side=tk.RIGHT, padx=2)
+                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10), padx=8).pack(side=tk.RIGHT, padx=2)
         tk.Button(left_top, text="Rebuild", command=self._rebuild_exam,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8, "bold"), padx=8
+                  font=("Calibri", 10, "bold"), padx=10
                   ).pack(side=tk.RIGHT, padx=2)
 
         tree_frame = tk.Frame(left, bg=CLR_WHITE)
@@ -484,13 +536,16 @@ class TimePyBlingApp(tk.Tk):
 
         # ── Paper panel (below exam tree) ──
         self.paper_lf = tk.LabelFrame(left, text="Papers for selected subject",
-                                       bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
-                                       padx=6, pady=6)
+                                       bg=CLR_WHITE, font=("Calibri", 10, "bold"),
+                                       fg=CLR_BLUE, padx=6, pady=6)
         self.paper_lf.pack(fill=tk.X, padx=6, pady=6)
 
         self.paper_listbox = tk.Listbox(self.paper_lf, height=4,
-                                         font=("Courier", 9),
+                                         font=("Calibri", 10),
                                          relief=tk.SOLID, bd=1,
+                                         bg=CLR_WHITE,
+                                         selectbackground=CLR_ORANGE,
+                                         selectforeground=CLR_WHITE,
                                          selectmode=tk.SINGLE)
         self.paper_listbox.pack(fill=tk.X, pady=(0, 4))
         self.paper_listbox.bind("<<ListboxSelect>>", self._on_paper_select)
@@ -499,47 +554,50 @@ class TimePyBlingApp(tk.Tk):
         paper_btn_row.pack(fill=tk.X, pady=(0, 4))
         tk.Button(paper_btn_row, text="+ Add Paper",
                   command=self._add_paper,
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8, "bold"), padx=6
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=8
                   ).pack(side=tk.LEFT)
         tk.Button(paper_btn_row, text="− Remove",
                   command=self._remove_paper,
                   bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6
+                  font=("Calibri", 10), padx=8
                   ).pack(side=tk.LEFT, padx=4)
         tk.Button(paper_btn_row, text="📌 Pin…",
                   command=self._pin_paper,
-                  bg="#8e44ad", fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6
+                  bg=CLR_PINK, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10), padx=8
                   ).pack(side=tk.LEFT)
         tk.Button(paper_btn_row, text="Unpin",
                   command=self._unpin_paper,
-                  bg="#888", fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6
+                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10), padx=8
                   ).pack(side=tk.LEFT, padx=4)
 
         constr_row = tk.Frame(self.paper_lf, bg=CLR_WHITE)
         constr_row.pack(fill=tk.X)
         tk.Label(constr_row, text="Constraint:", bg=CLR_WHITE,
-                 font=("Helvetica", 8)).pack(side=tk.LEFT)
-        self.constr_entry = tk.Entry(constr_row, font=("Helvetica", 9),
+                 fg="#1E293B", font=("Calibri", 10)).pack(side=tk.LEFT)
+        self.constr_entry = tk.Entry(constr_row, font=("Calibri", 10),
                                       relief=tk.SOLID, bd=1, width=6)
         self.constr_entry.pack(side=tk.LEFT, padx=2)
         self.constr_entry.bind("<Return>", lambda e: self._add_constraint())
         self._constr_add_btn = tk.Button(constr_row, text="Add",
                                           command=self._add_constraint,
                                           bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                                          font=("Helvetica", 8), padx=4)
+                                          font=("Calibri", 10), padx=6)
         self._constr_add_btn.pack(side=tk.LEFT)
         self._constr_remove_btn = tk.Button(constr_row, text="Remove",
                                              command=self._remove_constraint,
-                                             bg="#888", fg=CLR_WHITE, relief=tk.FLAT,
-                                             font=("Helvetica", 8), padx=4)
+                                             bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
+                                             font=("Calibri", 10), padx=6)
         self._constr_remove_btn.pack(side=tk.LEFT, padx=2)
 
         self.constr_listbox = tk.Listbox(self.paper_lf, height=2,
-                                          font=("Courier", 9),
+                                          font=("Calibri", 10),
                                           relief=tk.SOLID, bd=1,
+                                          bg=CLR_WHITE,
+                                          selectbackground=CLR_PINK,
+                                          selectforeground=CLR_WHITE,
                                           selectmode=tk.SINGLE)
         self.constr_listbox.pack(fill=tk.X, pady=(4, 0))
 
@@ -549,90 +607,95 @@ class TimePyBlingApp(tk.Tk):
 
         # Exclusions
         excl_frame = tk.LabelFrame(right, text="Exam Exclusions",
-                                    bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
-                                    padx=8, pady=6)
+                                    bg=CLR_WHITE, font=("Calibri", 10, "bold"),
+                                    fg=CLR_BLUE, padx=8, pady=6)
         excl_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         self.excl_listbox = tk.Listbox(excl_frame, height=3,
-                                        font=("Courier", 9),
+                                        font=("Calibri", 10),
                                         relief=tk.SOLID, bd=1,
+                                        bg=CLR_WHITE,
+                                        selectbackground=CLR_ORANGE,
+                                        selectforeground=CLR_WHITE,
                                         selectmode=tk.SINGLE)
         self.excl_listbox.pack(fill=tk.X, pady=(0, 4))
         self._refresh_exclusion_listbox()
 
         excl_row = tk.Frame(excl_frame, bg=CLR_WHITE)
         excl_row.pack(fill=tk.X)
-        self.excl_entry = tk.Entry(excl_row, font=("Helvetica", 9),
+        self.excl_entry = tk.Entry(excl_row, font=("Calibri", 10),
                                     relief=tk.SOLID, bd=1, width=8)
         self.excl_entry.pack(side=tk.LEFT)
         self.excl_entry.bind("<Return>", lambda e: self._add_exclusion())
         tk.Button(excl_row, text="Add", command=self._add_exclusion,
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8, "bold"), padx=6).pack(side=tk.LEFT, padx=3)
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=8).pack(side=tk.LEFT, padx=3)
         tk.Button(excl_row, text="Remove", command=self._remove_exclusion,
                   bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8), padx=6).pack(side=tk.LEFT)
+                  font=("Calibri", 10), padx=8).pack(side=tk.LEFT)
 
         # Scheduler controls
         sched_lf = tk.LabelFrame(right, text="Exam Schedule",
-                                   bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
-                                   padx=8, pady=6)
+                                   bg=CLR_WHITE, font=("Calibri", 10, "bold"),
+                                   fg=CLR_BLUE, padx=8, pady=6)
         sched_lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
 
         ctrl = tk.Frame(sched_lf, bg=CLR_WHITE)
         ctrl.pack(fill=tk.X, pady=(0, 4))
 
         # Row 0: Start / End date entries + live slot count
-        tk.Label(ctrl, text="Start:", bg=CLR_WHITE,
-                 font=("Helvetica", 9)).grid(row=0, column=0, sticky=tk.W)
+        tk.Label(ctrl, text="Start:", bg=CLR_WHITE, fg="#1E293B",
+                 font=("Calibri", 10)).grid(row=0, column=0, sticky=tk.W)
         self.sched_start_var = tk.StringVar(
             value=DEFAULT_EXAM_START.strftime("%Y-%m-%d"))
         self._start_entry = tk.Entry(ctrl, textvariable=self.sched_start_var,
-                                      font=("Helvetica", 9), relief=tk.SOLID,
+                                      font=("Calibri", 10), relief=tk.SOLID,
                                       bd=1, width=11)
         self._start_entry.grid(row=0, column=1, sticky=tk.W, padx=(2, 8))
         self._start_entry.bind("<FocusOut>", lambda e: self._on_session_param_changed())
         self._start_entry.bind("<Return>",   lambda e: self._on_session_param_changed())
 
-        tk.Label(ctrl, text="End:", bg=CLR_WHITE,
-                 font=("Helvetica", 9)).grid(row=0, column=2, sticky=tk.W)
+        tk.Label(ctrl, text="End:", bg=CLR_WHITE, fg="#1E293B",
+                 font=("Calibri", 10)).grid(row=0, column=2, sticky=tk.W)
         self.sched_end_var = tk.StringVar(
             value=DEFAULT_EXAM_END.strftime("%Y-%m-%d"))
         self._end_entry = tk.Entry(ctrl, textvariable=self.sched_end_var,
-                                    font=("Helvetica", 9), relief=tk.SOLID,
+                                    font=("Calibri", 10), relief=tk.SOLID,
                                     bd=1, width=11)
         self._end_entry.grid(row=0, column=3, sticky=tk.W, padx=(2, 8))
         self._end_entry.bind("<FocusOut>", lambda e: self._on_session_param_changed())
         self._end_entry.bind("<Return>",   lambda e: self._on_session_param_changed())
 
         self.session_count_label = tk.Label(ctrl, text="", bg=CLR_WHITE,
-                                             fg=CLR_BLUE,
-                                             font=("Helvetica", 9, "bold"))
+                                             fg=CLR_ORANGE,
+                                             font=("Calibri", 10, "bold"))
         self.session_count_label.grid(row=0, column=4, sticky=tk.W, padx=(0, 4))
 
         # Row 1: AM / PM checkboxes + Configure sessions button  (BUG 6)
         tk.Checkbutton(ctrl, text="AM", variable=self._am_var,
-                       bg=CLR_WHITE, font=("Helvetica", 9),
+                       bg=CLR_WHITE, fg="#1E293B", font=("Calibri", 10),
+                       selectcolor=CLR_ORANGE,
                        command=self._on_session_param_changed
                        ).grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
         tk.Checkbutton(ctrl, text="PM", variable=self._pm_var,
-                       bg=CLR_WHITE, font=("Helvetica", 9),
+                       bg=CLR_WHITE, fg="#1E293B", font=("Calibri", 10),
+                       selectcolor=CLR_PINK,
                        command=self._on_session_param_changed
                        ).grid(row=1, column=1, sticky=tk.W, pady=(4, 0))
         tk.Button(ctrl, text="Configure sessions…",
                   command=self._open_session_calendar,
-                  bg=CLR_LIGHT, font=("Helvetica", 8),
-                  relief=tk.FLAT, padx=8
+                  bg=CLR_LIGHT, fg="#1E293B", font=("Calibri", 10),
+                  relief=tk.FLAT, padx=10
                   ).grid(row=1, column=2, columnspan=2, sticky=tk.W, pady=(4, 0))
 
         # Row 2: Grade filter + Generate
-        tk.Label(ctrl, text="Grade:", bg=CLR_WHITE,
-                 font=("Helvetica", 9)).grid(row=2, column=0, sticky=tk.W,
+        tk.Label(ctrl, text="Grade:", bg=CLR_WHITE, fg="#1E293B",
+                 font=("Calibri", 10)).grid(row=2, column=0, sticky=tk.W,
                                               pady=(4, 0))
         self.sched_grade_var = tk.StringVar()
         self.sched_grade_cb  = ttk.Combobox(
             ctrl, textvariable=self.sched_grade_var,
-            state="readonly", width=10, font=("Helvetica", 9))
+            state="readonly", width=10, font=("Calibri", 10))
         self.sched_grade_cb.grid(row=2, column=1, columnspan=2, sticky=tk.W,
                                   padx=(4, 12), pady=(4, 0))
         self.sched_grade_cb.bind("<<ComboboxSelected>>",
@@ -641,24 +704,27 @@ class TimePyBlingApp(tk.Tk):
         tk.Button(ctrl, text="Generate Schedule",
                   command=self._generate_exam_schedule,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10, pady=3
+                  font=("Calibri", 10, "bold"), padx=12, pady=4
                   ).grid(row=2, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
 
         tk.Button(ctrl, text="Export / View All",
                   command=self._open_schedule_popout,
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10, pady=3
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=12, pady=4
                   ).grid(row=3, column=3, sticky=tk.W, padx=(4, 0), pady=(4, 0))
 
         # Per-grade slot summary (BUG 6)
         self.slot_summary_text = tk.Text(sched_lf, height=5,
-                                          font=("Courier", 8),
+                                          font=("Calibri", 10),
                                           state=tk.DISABLED, relief=tk.FLAT,
-                                          bg=CLR_LIGHT, wrap=tk.NONE)
+                                          bg=CLR_LIGHT, wrap=tk.WORD)
         self.slot_summary_text.pack(fill=tk.X, padx=2, pady=(0, 4))
-        self.slot_summary_text.tag_config("ok",    foreground=CLR_GREEN)
-        self.slot_summary_text.tag_config("short", foreground=CLR_RED)
-        self.slot_summary_text.tag_config("dim",   foreground="#888")
+        self.slot_summary_text.tag_config("ok",    foreground=CLR_GREEN,
+                                           font=("Calibri", 10))
+        self.slot_summary_text.tag_config("short", foreground=CLR_RED,
+                                           font=("Calibri", 10))
+        self.slot_summary_text.tag_config("dim",   foreground="#6B7280",
+                                           font=("Calibri", 10))
 
         # Initialise the slot count label
         self._update_session_count_label()
@@ -666,18 +732,23 @@ class TimePyBlingApp(tk.Tk):
         # Schedule output
         self.sched_text = _scrolled_text(sched_lf)
         self.sched_text.tag_config("header",
-                                    font=("Courier", 9, "bold"),
-                                    foreground="#2c3e50")
-        self.sched_text.tag_config("am",  background=CLR_MORNING)
-        self.sched_text.tag_config("pm",  background=CLR_AFTERNOON)
-        self.sched_text.tag_config("dim",     foreground="#888")
-        self.sched_text.tag_config("warn",    foreground="#e67e22")
-        self.sched_text.tag_config("day_sep", foreground="#bdc3c7")
+                                    font=("Calibri", 11, "bold"),
+                                    foreground=CLR_HEADER)
+        self.sched_text.tag_config("am",  background=CLR_MORNING,
+                                    foreground="#7C2D12")
+        self.sched_text.tag_config("pm",  background=CLR_AFTERNOON,
+                                    foreground="#831843")
+        self.sched_text.tag_config("dim",     foreground="#6B7280",
+                                    font=("Calibri", 10))
+        self.sched_text.tag_config("warn",    foreground=CLR_ORANGE,
+                                    font=("Calibri", 10))
+        self.sched_text.tag_config("day_sep", foreground=CLR_MID,
+                                    font=("Calibri", 10))
 
         # ── Exam Cost Function  (BUG 3 — exam tab)  ──
         cost_lf = tk.LabelFrame(right, text="Exam Cost Function",
-                                 bg=CLR_WHITE, font=("Helvetica", 9, "bold"),
-                                 padx=8, pady=6)
+                                 bg=CLR_WHITE, font=("Calibri", 10, "bold"),
+                                 fg=CLR_BLUE, padx=8, pady=6)
         cost_lf.pack(fill=tk.X, padx=8, pady=(0, 8))
 
         wf = tk.Frame(cost_lf, bg=CLR_WHITE)
@@ -687,12 +758,12 @@ class TimePyBlingApp(tk.Tk):
         self._cost_weight_vars: list[tk.StringVar] = []
         for i, (lbl, dflt) in enumerate(weight_defs):
             r, c = i // 2, (i % 2) * 3
-            tk.Label(wf, text=f"{lbl}:", bg=CLR_WHITE,
-                     font=("Helvetica", 8)).grid(row=r, column=c, sticky=tk.W,
+            tk.Label(wf, text=f"{lbl}:", bg=CLR_WHITE, fg="#1E293B",
+                     font=("Calibri", 10)).grid(row=r, column=c, sticky=tk.W,
                                                   padx=(0, 2), pady=2)
             v = tk.StringVar(value=str(dflt))
             self._cost_weight_vars.append(v)
-            tk.Entry(wf, textvariable=v, font=("Helvetica", 8),
+            tk.Entry(wf, textvariable=v, font=("Calibri", 10),
                      relief=tk.SOLID, bd=1, width=5
                      ).grid(row=r, column=c + 1, sticky=tk.W, padx=(0, 12), pady=2)
 
@@ -701,11 +772,11 @@ class TimePyBlingApp(tk.Tk):
         tk.Button(calc_row, text="Calculate",
                   command=self._calculate_exam_cost,
                   bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 8, "bold"), padx=8
+                  font=("Calibri", 10, "bold"), padx=10
                   ).pack(side=tk.LEFT)
         self.exam_cost_result_label = tk.Label(calc_row, text="",
-                                                bg=CLR_WHITE,
-                                                font=("Courier", 8),
+                                                bg=CLR_WHITE, fg="#1E293B",
+                                                font=("Calibri", 10),
                                                 justify=tk.LEFT)
         self.exam_cost_result_label.pack(side=tk.LEFT, padx=6)
 
@@ -790,7 +861,7 @@ class TimePyBlingApp(tk.Tk):
             for sb in sorted(by_sb, key=lambda n: (n[0], int(n[1:]))):
                 _write(w, f"\n  Subblock {sb}\n", "heading")
                 for entry in sorted(by_sb[sb], key=lambda e: e["student"]):
-                    _write(w, f"    Student {entry['student']:>6}:  "
+                    _write(w, f"    {self._student_display(entry['student']):<30}:  "
                               f"{'  vs  '.join(entry['classes'])}\n", "fail")
 
         if teacher_clashes:
@@ -854,7 +925,8 @@ class TimePyBlingApp(tk.Tk):
                 _write(w, f"\n  {info['label']}\n", "heading")
                 _write(w, f"    Count:     {info['count']}\n", "warn")
                 _write(w, f"    Subblocks: {info['subblocks']}\n", "dim")
-                _write(w, f"    Students:  {info['students']}\n", "dim")
+                student_displays = [self._student_display(s) for s in info["students"]]
+                _write(w, f"    Students:  {student_displays}\n", "dim")
 
     # ─────────────────────────────────────────────────────────
     # TIMETABLE GRID
@@ -878,6 +950,28 @@ class TimePyBlingApp(tk.Tk):
                 for cl in subblock.class_lists.values():
                     students |= cl.student_list.students
         return sorted(students)
+
+    def _student_display(self, student_id: int) -> str:
+        """Return 'Firstname Lastname (ID)' if name known, else just 'ID'."""
+        names = getattr(self.timetable_tree, "student_names", {})
+        name = names.get(student_id)
+        if name:
+            return f"{name} ({student_id})"
+        return str(student_id)
+
+    @staticmethod
+    def _parse_student_id(value: str):
+        """Extract int student ID from a display string like 'Name (ID)' or bare 'ID'."""
+        value = value.strip()
+        if value.endswith(")") and "(" in value:
+            try:
+                return int(value[value.rfind("(") + 1:-1])
+            except ValueError:
+                pass
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
     def _all_teachers(self) -> list:
         teachers = set()
@@ -909,7 +1003,7 @@ class TimePyBlingApp(tk.Tk):
             return []
         etype = self._entity_type_var.get()
         if etype == "Student":
-            return [str(s) for s in self._all_students()]
+            return [self._student_display(s) for s in self._all_students()]
         elif etype == "Teacher":
             return self._all_teachers()
         return self._all_subjects()
@@ -957,26 +1051,26 @@ class TimePyBlingApp(tk.Tk):
         win.resizable(True, True)
 
         tk.Label(win, text=f"Classes in {subblock_name}",
-                 font=("Helvetica", 11, "bold"),
-                 bg=CLR_WHITE).pack(padx=14, pady=(10, 4))
+                 font=("Calibri", 12, "bold"),
+                 fg=CLR_BLUE, bg=CLR_WHITE).pack(padx=14, pady=(10, 4))
 
         frame = tk.Frame(win, bg=CLR_WHITE)
         frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 4))
 
         if not sb or not sb.class_lists:
-            tk.Label(frame, text="(no classes)", fg="#888",
-                     bg=CLR_WHITE, font=("Helvetica", 9)).pack()
+            tk.Label(frame, text="(no classes)", fg="#9CA3AF",
+                     bg=CLR_WHITE, font=("Calibri", 10)).pack()
         else:
             for label in sorted(sb.class_lists):
                 cl = sb.class_lists[label]
                 count = len(cl.student_list)
                 tk.Label(frame, text=f"  {label}   ({count} students)",
-                         bg=CLR_WHITE, font=("Courier", 9),
+                         bg=CLR_WHITE, fg="#1E293B", font=("Calibri", 10),
                          anchor="w").pack(fill=tk.X)
 
         tk.Button(win, text="Close", command=win.destroy,
-                  bg=CLR_LIGHT, relief=tk.FLAT,
-                  font=("Helvetica", 9), padx=12
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=14
                   ).pack(pady=(0, 10))
 
     def _refresh_entity_grid(self, entity_type: str, value: str):
@@ -987,21 +1081,24 @@ class TimePyBlingApp(tk.Tk):
         self._entity_heading_var.set(f"{entity_type}: {value}")
 
         gf = self._entity_grid_frame
+        # Allow all columns to stretch
+        for c in range(8):
+            gf.columnconfigure(c, weight=1)
 
         # Column headers
         tk.Label(gf, text="", bg=CLR_GRID_HEADER,
-                 width=8, relief=tk.RIDGE, bd=1
+                 relief=tk.RIDGE, bd=1, padx=6, pady=4
                  ).grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
         for col in range(7):
             tk.Label(gf, text=f"P{col+1}",
-                     bg=CLR_GRID_HEADER, font=("Helvetica", 9, "bold"),
-                     width=18, relief=tk.RIDGE, bd=1
+                     bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
+                     fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
                      ).grid(row=0, column=col+1, padx=1, pady=1, sticky="nsew")
 
         for day in range(8):
             tk.Label(gf, text=f"Day {day+1}",
-                     bg=CLR_GRID_HEADER, font=("Helvetica", 9, "bold"),
-                     width=8, relief=tk.RIDGE, bd=1
+                     bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
+                     fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
                      ).grid(row=day+1, column=0, padx=1, pady=1, sticky="nsew")
             for col in range(7):
                 subblock_name = TIMETABLE_GRID[day][col]
@@ -1014,10 +1111,7 @@ class TimePyBlingApp(tk.Tk):
                         for label, cl in sb.class_lists.items():
                             parts = label.split("_")
                             if entity_type == "Student":
-                                try:
-                                    sid = int(value)
-                                except ValueError:
-                                    sid = None
+                                sid = self._parse_student_id(value)
                                 if sid is not None and sid in cl.student_list.students:
                                     matching.append(label)
                             elif entity_type == "Teacher":
@@ -1042,13 +1136,14 @@ class TimePyBlingApp(tk.Tk):
 
                 cell_text = "\n".join(_fmt(lbl) for lbl in matching) if matching else ""
                 cell_bg   = CLR_GRID_ACTIVE if matching else CLR_GRID_CELL
+                cell_fg   = "#1E293B" if matching else "#9CA3AF"
                 tk.Label(gf,
                          text=cell_text,
-                         bg=cell_bg,
-                         font=("Courier", 8),
-                         width=18, wraplength=140,
+                         bg=cell_bg, fg=cell_fg,
+                         font=("Calibri", 10),
+                         wraplength=150,
                          justify=tk.CENTER,
-                         relief=tk.RIDGE, bd=1, pady=4
+                         relief=tk.RIDGE, bd=1, padx=4, pady=6
                          ).grid(row=day+1, column=col+1, padx=1, pady=1, sticky="nsew")
 
     # ─────────────────────────────────────────────────────────
@@ -1459,7 +1554,7 @@ class TimePyBlingApp(tk.Tk):
 
         tk.Label(win,
                  text="Save current timetable and exam state\nbefore closing?",
-                 bg=CLR_WHITE, font=("Helvetica", 10),
+                 bg=CLR_WHITE, font=("Calibri", 10),
                  justify=tk.CENTER).pack(padx=24, pady=(18, 12))
 
         btn_row = tk.Frame(win, bg=CLR_WHITE)
@@ -1481,17 +1576,17 @@ class TimePyBlingApp(tk.Tk):
         tk.Button(btn_row, text="Save & Exit",
                   command=save_and_exit,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=12
+                  font=("Calibri", 9, "bold"), padx=12
                   ).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_row, text="Exit without saving",
                   command=exit_no_save,
                   bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9), padx=12
+                  font=("Calibri", 9), padx=12
                   ).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_row, text="Cancel",
                   command=cancel,
                   bg=CLR_LIGHT, relief=tk.FLAT,
-                  font=("Helvetica", 9), padx=12
+                  font=("Calibri", 9), padx=12
                   ).pack(side=tk.LEFT, padx=4)
 
     def _import_exam_state(self):
@@ -1770,7 +1865,7 @@ class TimePyBlingApp(tk.Tk):
             txt += "  (custom)"
         self.session_count_label.config(
             text=txt,
-            fg="#8e44ad" if custom else CLR_BLUE
+            fg=CLR_PINK if custom else CLR_ORANGE
         )
         self._update_slot_summary(n_slots)
 
@@ -1836,7 +1931,7 @@ class TimePyBlingApp(tk.Tk):
         top.configure(bg=CLR_WHITE)
 
         tk.Label(top, text="Toggle AM/PM sessions on or off:",
-                 bg=CLR_WHITE, font=("Helvetica", 10, "bold")
+                 bg=CLR_WHITE, fg=CLR_HEADER, font=("Calibri", 11, "bold")
                  ).pack(pady=(10, 4), padx=10, anchor=tk.W)
 
         cf = tk.Frame(top, bg=CLR_WHITE)
@@ -1855,13 +1950,15 @@ class TimePyBlingApp(tk.Tk):
             row = tk.Frame(inner, bg=bg)
             row.pack(fill=tk.X, pady=1)
             tk.Label(row, text=d.strftime("%a %d %b"), bg=bg,
-                     font=("Courier", 9), width=14, anchor=tk.W
+                     fg="#1E293B", font=("Calibri", 10), width=14, anchor=tk.W
                      ).pack(side=tk.LEFT, padx=(4, 8))
             for sess in SESSIONS:
                 v = tk.BooleanVar(value=state.get(sess, True))
                 session_vars[(d, sess)] = v
+                sc = CLR_ORANGE if sess == "AM" else CLR_PINK
                 tk.Checkbutton(row, text=sess, variable=v,
-                               bg=bg, font=("Helvetica", 9)
+                               bg=bg, fg="#1E293B", font=("Calibri", 10),
+                               selectcolor=sc
                                ).pack(side=tk.LEFT, padx=2)
 
         inner.update_idletasks()
@@ -1890,15 +1987,15 @@ class TimePyBlingApp(tk.Tk):
                 v.set(True)
 
         tk.Button(btn_frame, text="Apply", command=_apply,
-                  bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=16, pady=4
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=16, pady=4
                   ).pack(side=tk.LEFT)
         tk.Button(btn_frame, text="Cancel", command=top.destroy,
-                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  bg=CLR_LIGHT, fg="#1E293B", font=("Calibri", 10),
                   relief=tk.FLAT, padx=10, pady=4
                   ).pack(side=tk.LEFT, padx=8)
         tk.Button(btn_frame, text="Reset to all on", command=_reset_all,
-                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  bg=CLR_BLUE, fg=CLR_WHITE, font=("Calibri", 10),
                   relief=tk.FLAT, padx=10, pady=4
                   ).pack(side=tk.LEFT)
 
@@ -1936,14 +2033,16 @@ class TimePyBlingApp(tk.Tk):
         top.configure(bg=CLR_WHITE)
 
         tk.Label(top, text=f"Select a slot for  {paper.label}:",
-                 bg=CLR_WHITE, font=("Helvetica", 10, "bold")
+                 bg=CLR_WHITE, fg=CLR_HEADER, font=("Calibri", 11, "bold")
                  ).pack(pady=(10, 4), padx=10, anchor=tk.W)
 
         lb_frame = tk.Frame(top, bg=CLR_WHITE)
         lb_frame.pack(fill=tk.BOTH, expand=True, padx=10)
         lb_sb = ttk.Scrollbar(lb_frame, orient=tk.VERTICAL)
         lb_sb.pack(side=tk.RIGHT, fill=tk.Y)
-        lb = tk.Listbox(lb_frame, font=("Courier", 9), relief=tk.SOLID, bd=1,
+        lb = tk.Listbox(lb_frame, font=("Calibri", 10), relief=tk.SOLID, bd=1,
+                        bg=CLR_WHITE,
+                        selectbackground=CLR_PINK, selectforeground=CLR_WHITE,
                         selectmode=tk.SINGLE, yscrollcommand=lb_sb.set)
         lb_sb.config(command=lb.yview)
         lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1972,11 +2071,11 @@ class TimePyBlingApp(tk.Tk):
             top.destroy()
 
         tk.Button(btn_frame, text="Pin to slot", command=_pin,
-                  bg="#8e44ad", fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=16, pady=4
+                  bg=CLR_PINK, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=16, pady=4
                   ).pack(side=tk.LEFT)
         tk.Button(btn_frame, text="Cancel", command=top.destroy,
-                  bg=CLR_LIGHT, font=("Helvetica", 9),
+                  bg=CLR_LIGHT, fg="#1E293B", font=("Calibri", 10),
                   relief=tk.FLAT, padx=10, pady=4
                   ).pack(side=tk.LEFT, padx=8)
 
@@ -2010,15 +2109,16 @@ class TimePyBlingApp(tk.Tk):
         top.geometry("980x620")
         top.configure(bg=CLR_WHITE)
 
-        bar = tk.Frame(top, bg=CLR_LIGHT, pady=6, padx=10)
+        bar = tk.Frame(top, bg=CLR_HEADER, pady=8, padx=10)
         bar.pack(fill=tk.X)
         tk.Label(bar, text="Full Exam Schedule — All Grades",
-                 font=("Helvetica", 11, "bold"), bg=CLR_LIGHT).pack(side=tk.LEFT)
+                 font=("Calibri", 13, "bold"), bg=CLR_HEADER,
+                 fg=CLR_WHITE).pack(side=tk.LEFT)
         tk.Button(bar, text="Save as PDF / TXT",
                   command=lambda: self._save_schedule_export(
                       top, grades, grid, slot_meta, all_slots),
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Helvetica", 9, "bold"), padx=10
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10, "bold"), padx=12
                   ).pack(side=tk.RIGHT)
 
         cf = tk.Frame(top, bg=CLR_WHITE)
@@ -2034,43 +2134,50 @@ class TimePyBlingApp(tk.Tk):
         gf = tk.Frame(canvas, bg=CLR_WHITE)
         canvas.create_window((0, 0), window=gf, anchor="nw")
 
-        COL_W = 10
-        ROW_W = 22
-        HDR_BG = "#d5d8dc"
+        HDR_BG = CLR_GRID_HEADER
+        # Allow all columns to stretch with equal weight
+        gf.columnconfigure(0, weight=2)
+        for ci in range(len(grades)):
+            gf.columnconfigure(ci + 1, weight=1)
 
-        tk.Label(gf, text="Slot / Date / Sess", font=("Helvetica", 8, "bold"),
-                 bg=HDR_BG, width=ROW_W, anchor="w",
-                 relief=tk.RIDGE, bd=1).grid(row=0, column=0, sticky="nsew",
-                                              padx=1, pady=1)
+        tk.Label(gf, text="Slot / Date / Session", font=("Calibri", 10, "bold"),
+                 bg=HDR_BG, fg="#1E293B", anchor="w",
+                 padx=8, pady=5, relief=tk.RIDGE, bd=1
+                 ).grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         for ci, grade in enumerate(grades):
-            tk.Label(gf, text=grade, font=("Helvetica", 8, "bold"),
-                     bg=HDR_BG, width=COL_W, anchor="center",
-                     relief=tk.RIDGE, bd=1).grid(row=0, column=ci + 1,
-                                                  sticky="nsew", padx=1, pady=1)
+            tk.Label(gf, text=grade, font=("Calibri", 10, "bold"),
+                     bg=HDR_BG, fg="#1E293B", anchor="center",
+                     padx=6, pady=5, relief=tk.RIDGE, bd=1
+                     ).grid(row=0, column=ci + 1,
+                             sticky="nsew", padx=1, pady=1)
 
         for ri, slot_idx in enumerate(all_slots):
             d, session = slot_meta[slot_idx]
-            row_bg = CLR_MORNING if session == "AM" else CLR_AFTERNOON
-            lbl = f"Slot {slot_idx+1}  {d.strftime('%a %d %b')}  {session}"
-            tk.Label(gf, text=lbl, font=("Courier", 8),
-                     bg=row_bg, width=ROW_W, anchor="w",
-                     relief=tk.RIDGE, bd=1).grid(row=ri + 1, column=0,
-                                                  sticky="nsew", padx=1, pady=1)
+            row_bg  = CLR_MORNING   if session == "AM" else CLR_AFTERNOON
+            row_fg  = "#7C2D12"     if session == "AM" else "#831843"
+            lbl_txt = f"Slot {slot_idx+1}  {d.strftime('%a %d %b')}  {session}"
+            tk.Label(gf, text=lbl_txt, font=("Calibri", 10),
+                     bg=row_bg, fg=row_fg, anchor="w",
+                     padx=8, pady=4, relief=tk.RIDGE, bd=1
+                     ).grid(row=ri + 1, column=0,
+                             sticky="nsew", padx=1, pady=1)
             for ci, grade in enumerate(grades):
                 subjects = sorted(grid[slot_idx][grade])
                 if not subjects:
-                    tk.Label(gf, text="", font=("Courier", 8),
-                             bg=row_bg, width=COL_W, anchor="center",
-                             relief=tk.RIDGE, bd=1).grid(
-                                 row=ri + 1, column=ci + 1,
-                                 sticky="nsew", padx=1, pady=1)
+                    tk.Label(gf, text="", font=("Calibri", 10),
+                             bg=row_bg, anchor="center",
+                             padx=4, pady=4, relief=tk.RIDGE, bd=1
+                             ).grid(row=ri + 1, column=ci + 1,
+                                    sticky="nsew", padx=1, pady=1)
                 else:
                     cell_frame = tk.Frame(gf, bg=row_bg, relief=tk.RIDGE, bd=1)
                     cell_frame.grid(row=ri + 1, column=ci + 1,
                                     sticky="nsew", padx=1, pady=1)
                     for subj in subjects:
-                        lbl = tk.Label(cell_frame, text=subj, font=("Courier", 8),
-                                       bg=row_bg, width=COL_W, anchor="center",
+                        lbl = tk.Label(cell_frame, text=subj,
+                                       font=("Calibri", 10, "bold"),
+                                       bg=row_bg, fg=row_fg, anchor="center",
+                                       padx=4, pady=3,
                                        cursor="hand2")
                         lbl.pack(fill=tk.X)
                         lbl.bind("<Button-1>",
@@ -2123,13 +2230,16 @@ class TimePyBlingApp(tk.Tk):
 
         col_widths = [130] + [50] * len(grades)
         table = Table(rows, colWidths=col_widths, repeatRows=1)
-        am_bg = colors.Color(0.91, 0.96, 0.91)
-        pm_bg = colors.Color(1.0,  0.97, 0.88)
+        am_bg = colors.Color(1.0,  0.95, 0.88)   # warm amber (morning)
+        pm_bg = colors.Color(0.99, 0.89, 0.93)   # soft pink (afternoon)
+        hdr_bg = colors.Color(0.86, 0.91, 0.99)  # light blue header
         style_cmds = [
             ("FONTNAME",   (0, 0), (-1, 0),  "Helvetica-Bold"),
-            ("FONTSIZE",   (0, 0), (-1, -1), 7),
-            ("BACKGROUND", (0, 0), (-1, 0),  colors.Color(0.84, 0.86, 0.86)),
-            ("GRID",       (0, 0), (-1, -1), 0.4, colors.grey),
+            ("FONTNAME",   (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE",   (0, 0), (-1, -1), 8),
+            ("BACKGROUND", (0, 0), (-1, 0),  hdr_bg),
+            ("TEXTCOLOR",  (0, 0), (-1, 0),  colors.Color(0.12, 0.23, 0.37)),
+            ("GRID",       (0, 0), (-1, -1), 0.5, colors.Color(0.7, 0.7, 0.8)),
             ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN",      (1, 1), (-1, -1), "CENTER"),
         ]
@@ -2149,12 +2259,9 @@ class TimePyBlingApp(tk.Tk):
     # ─────────────────────────────────────────────────────────
 
     def _style_tree(self, tree: ttk.Treeview):
-        style = ttk.Style()
-        style.configure("Treeview",
-                         font=("Courier", 9), rowheight=22,
-                         background=CLR_WHITE, fieldbackground=CLR_WHITE)
-        style.configure("Treeview.Heading",
-                         font=("Helvetica", 10, "bold"))
+        # Tagging for excluded items — actual Treeview style applied in _apply_theme
+        tree.tag_configure("excluded", foreground="#9CA3AF")
+        tree.tag_configure("subject",  foreground="#1E293B")
 
 
 # ─────────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ Usage
 """
 
 from __future__ import annotations
+from collections import defaultdict
 from core.timetable_tree import TimetableTree
 
 
@@ -55,6 +56,32 @@ def find_student_clashes(tree: TimetableTree) -> list[dict]:
                     })
 
     return clashes
+
+
+# ---------------------------------------------------------------------------
+# Data integrity
+# ---------------------------------------------------------------------------
+
+def data_integrity_issues(tree: TimetableTree) -> list[dict]:
+    """Find class labels with fewer than 5 students across all subblocks."""
+    class_info: dict[str, dict] = defaultdict(
+        lambda: {"students": set(), "subblocks": set()})
+    for block in tree.blocks.values():
+        for sb_name, subblock in block.subblocks.items():
+            for label, cl in subblock.class_lists.items():
+                class_info[label]["students"] |= cl.student_list.students
+                class_info[label]["subblocks"].add(sb_name)
+    issues = []
+    for label, info in sorted(class_info.items()):
+        if len(info["students"]) < 5:
+            issues.append({
+                "label":    label,
+                "count":    len(info["students"]),
+                "subblocks": sorted(info["subblocks"],
+                                    key=lambda x: (x[0], int(x[1:]))),
+                "students": sorted(info["students"]),
+            })
+    return issues
 
 
 # ---------------------------------------------------------------------------

@@ -119,6 +119,8 @@ class Block:
 class TimetableTree:
     def __init__(self):
         self.blocks = {}
+        # Maps student_id -> "Firstname Lastname" (populated from Excel Name/Surname columns)
+        self.student_names: dict[int, str] = {}
 
     def get_or_create_block(self, block_name: str) -> Block:
         if block_name not in self.blocks:
@@ -168,13 +170,22 @@ def timetable_tree_to_dict(tree: "TimetableTree") -> dict:
             for cl_label, cl in subblock.class_lists.items():
                 out[block_name][sb_name][cl_label] = sorted(
                     cl.student_list.students)
-    return out
+    return {
+        "_blocks": out,
+        "_names": {str(k): v for k, v in tree.student_names.items()},
+    }
 
 
 def timetable_tree_from_dict(data: dict) -> "TimetableTree":
     """Reconstruct a TimetableTree from a dict produced by timetable_tree_to_dict."""
     tree = TimetableTree()
-    for block_name, subblocks in data.items():
+    # Support both new format (with _blocks/_names keys) and legacy format
+    if "_blocks" in data:
+        blocks_data = data["_blocks"]
+        tree.student_names = {int(k): v for k, v in data.get("_names", {}).items()}
+    else:
+        blocks_data = data
+    for block_name, subblocks in blocks_data.items():
         for sb_name, class_lists in subblocks.items():
             for cl_label, students in class_lists.items():
                 for sid in students:
@@ -308,6 +319,19 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
     check_for_data_warnings(df, timetable_cols)
 
     tree = TimetableTree()
+
+    # Build student_names lookup from Name/Surname columns if present
+    has_name    = "Name"    in df.columns
+    has_surname = "Surname" in df.columns
+    for _, row in df.iterrows():
+        sid = int(row["Studentid"])
+        parts = []
+        if has_name and not pd.isna(row.get("Name")):
+            parts.append(str(row["Name"]).strip())
+        if has_surname and not pd.isna(row.get("Surname")):
+            parts.append(str(row["Surname"]).strip())
+        if parts:
+            tree.student_names[sid] = " ".join(parts)
 
     for _, row in df.iterrows():
         student_id = int(row["Studentid"])
