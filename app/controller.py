@@ -6,7 +6,7 @@ from app.events import EventBus
 from app.state import AppState, SessionConfig
 from reader.exam_tree import build_exam_tree_from_timetable_tree
 from reader.exam_paper import ExamPaperRegistry
-from reader.exam_scheduler import build_schedule, ScheduleResult
+from reader.exam_scheduler import build_schedule, ScheduleResult, PenaltyEntry
 
 # Event name constants
 EVT_TIMETABLE_LOADED    = "timetable_loaded"
@@ -76,6 +76,7 @@ class AppController:
         self._state.paper_registry = ExamPaperRegistry.from_exam_tree(
             self._state.exam_tree,
             exclusions=self._state.exclusions,
+            prior=self._state.paper_registry,
         )
         self._bus.publish(EVT_REGISTRY_BUILT, state=self._state)
 
@@ -105,6 +106,46 @@ class AppController:
         if self._state.paper_registry is None:
             raise ValueError("paper_registry is not built")
         self._state.paper_registry.remove_constraint(label, code)
+        self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
+
+    def set_difficulty(self, subject: str, grade: str, difficulty: str) -> None:
+        if self._state.paper_registry is None:
+            raise ValueError("paper_registry is not built")
+        self._state.paper_registry.set_difficulty(subject, grade, difficulty)
+        self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
+
+    def add_link(self, label_a: str, label_b: str) -> None:
+        if self._state.paper_registry is None:
+            raise ValueError("paper_registry is not built")
+        paper_a = self._state.paper_registry.get(label_a)
+        paper_b = self._state.paper_registry.get(label_b)
+        if paper_a is None or paper_b is None:
+            raise ValueError(f"Paper not found: {label_a} or {label_b}")
+        paper_a.links.add(label_b)
+        paper_b.links.add(label_a)
+        self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
+
+    def remove_link(self, label_a: str, label_b: str) -> None:
+        if self._state.paper_registry is None:
+            raise ValueError("paper_registry is not built")
+        paper_a = self._state.paper_registry.get(label_a)
+        paper_b = self._state.paper_registry.get(label_b)
+        if paper_a:
+            paper_a.links.discard(label_b)
+        if paper_b:
+            paper_b.links.discard(label_a)
+        self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
+
+    def add_study_paper(self, grade: str, pinned_slot: int | None = None) -> None:
+        if self._state.paper_registry is None:
+            raise ValueError("paper_registry is not built")
+        self._state.paper_registry.add_study_paper(grade, pinned_slot)
+        self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
+
+    def remove_study_paper(self, label: str) -> None:
+        if self._state.paper_registry is None:
+            raise ValueError("paper_registry is not built")
+        self._state.paper_registry.remove_study_paper(label)
         self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
 
     # ------------------------------------------------------------------
@@ -258,6 +299,7 @@ class AppController:
             self._state.paper_registry,
             sessions=sessions,
             exam_tree=self._state.exam_tree,
+            config=self._state.cost_config,
         )
         self._state.schedule_result = result
         self._bus.publish(EVT_SCHEDULE_GENERATED, state=self._state)

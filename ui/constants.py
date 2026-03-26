@@ -36,3 +36,13 @@ CLR_WHITE     = "white"
 CLR_BG        = "#F0F4FF"
 CLR_MORNING   = "#FFF3E0"
 CLR_AFTERNOON = "#FCE4EC"
+
+# Difficulty colors (exam matrix cells)
+CLR_DIFF_RED    = "#FECACA"
+CLR_DIFF_YELLOW = "#FEF3C7"
+CLR_DIFF_GREEN  = "#D1FAE5"
+CLR_DIFF_GRAY   = "#E5E7EB"
+
+# Matrix interaction
+CLR_HOVER       = "#BFDBFE"
+CLR_ST_ROW      = "#EDE9FE"

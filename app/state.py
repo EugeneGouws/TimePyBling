@@ -8,6 +8,7 @@ from core.timetable_tree import TimetableTree
 from reader.exam_tree import ExamTree
 from reader.exam_paper import ExamPaperRegistry
 from reader.exam_scheduler import ScheduleResult
+from app.cost_config import CostConfig
 
 DEFAULT_EXCLUSIONS: frozenset[str] = frozenset({"ST", "LIB", "PE", "RDI"})
 
@@ -28,3 +29,4 @@ class AppState:
     schedule_result: Optional[ScheduleResult] = None
     exclusions: set[str] = field(default_factory=lambda: set(DEFAULT_EXCLUSIONS))
     session_config: Optional[SessionConfig] = None
+    cost_config: CostConfig = field(default_factory=CostConfig)

@@ -18,6 +18,7 @@ class ExamPaper:
     paper_number : int        # 1, 2, or 3
     student_ids  : set[int] = field(default_factory=set)
     constraints  : set[str] = field(default_factory=set)
+    links        : set[str] = field(default_factory=set)  # labels of linked partner papers
     pinned_slot  : Optional[int] = None   # slot index, None = free
 
     @property
@@ -38,16 +39,37 @@ class ExamPaperRegistry:
     def __init__(self):
         # key = paper label (e.g. "MA_P1_Gr12"), value = ExamPaper
         self._papers: dict[str, ExamPaper] = {}
+        # difficulty: "red" | "yellow" | "green", default "green"
+        # key = f"{subject}_{grade}" e.g. "MA_Gr12"
+        self._difficulty: dict[str, str] = {}
+
+    # ── Difficulty ────────────────────────────────────────────────────────
+
+    def get_difficulty(self, subject: str, grade: str) -> str:
+        return self._difficulty.get(f"{subject}_{grade}", "green")
+
+    def set_difficulty(self, subject: str, grade: str, value: str) -> None:
+        if value not in ("red", "yellow", "green"):
+            raise ValueError(f"Invalid difficulty: {value!r}")
+        self._difficulty[f"{subject}_{grade}"] = value
 
     # ── Build ──────────────────────────────────────────────────────────────
 
     @classmethod
-    def from_exam_tree(cls, tree: ExamTree,
-                       exclusions: set[str] | None = None) -> "ExamPaperRegistry":
+    def from_exam_tree(
+        cls,
+        tree: ExamTree,
+        exclusions: set[str] | None = None,
+        prior: "ExamPaperRegistry | None" = None,
+    ) -> "ExamPaperRegistry":
         """
         Build a registry from an ExamTree.
         Each subject+grade becomes one P1 paper.
         Excluded subject codes (e.g. {"ST", "LIB", "PE", "RDI"}) are skipped.
+
+        If *prior* is provided, copies constraints, difficulty, links,
+        pinned slots, and extra papers (P2/P3) from the prior registry
+        for any subject+grade that still exists in the new tree.
         """
         reg = cls()
         excl = exclusions or set()
@@ -63,7 +85,66 @@ class ExamPaperRegistry:
                     student_ids  = exam_subject.all_students(),
                 )
                 reg._papers[paper.label] = paper
+
+        if prior:
+            reg._copy_from_prior(prior)
+
         return reg
+
+    def _copy_from_prior(self, prior: "ExamPaperRegistry") -> None:
+        """Copy difficulty, links, constraints, pinned slots, and extra papers from a prior registry."""
+        # Copy difficulty settings
+        for key, value in prior._difficulty.items():
+            # key = "SUBJ_Grnn" — only copy if subject+grade still exists
+            parts = key.split("_", 1)
+            if len(parts) == 2:
+                subj, grade = parts
+                if self.papers_for_subject_grade(subj, grade):
+                    self._difficulty[key] = value
+
+        # Copy per-paper state and add extra papers
+        for label, old_paper in prior._papers.items():
+            if old_paper.subject == "ST":
+                # Carry over study papers directly
+                self._papers[label] = ExamPaper(
+                    grade        = old_paper.grade,
+                    subject      = "ST",
+                    paper_number = old_paper.paper_number,
+                    student_ids  = set(),
+                    constraints  = set(old_paper.constraints),
+                    links        = set(old_paper.links),
+                    pinned_slot  = old_paper.pinned_slot,
+                )
+                continue
+
+            if label in self._papers:
+                # P1 exists in new registry — copy constraints, links, pinned
+                new_paper = self._papers[label]
+                new_paper.constraints = set(old_paper.constraints)
+                new_paper.links = set(old_paper.links)
+                new_paper.pinned_slot = old_paper.pinned_slot
+            elif old_paper.paper_number > 1:
+                # Extra paper (P2/P3) — add if the subject+grade still exists
+                siblings = self.papers_for_subject_grade(old_paper.subject, old_paper.grade)
+                if siblings:
+                    p1 = next((p for p in siblings if p.paper_number == 1), None)
+                    if p1:
+                        new_paper = ExamPaper(
+                            grade        = old_paper.grade,
+                            subject      = old_paper.subject,
+                            paper_number = old_paper.paper_number,
+                            student_ids  = set(p1.student_ids),
+                            constraints  = set(old_paper.constraints),
+                            links        = set(old_paper.links),
+                            pinned_slot  = old_paper.pinned_slot,
+                        )
+                        self._papers[new_paper.label] = new_paper
+
+        # Clean up dangling link references — remove links to papers that
+        # no longer exist (ghost subjects that disappeared from the tree)
+        valid_labels = set(self._papers.keys())
+        for paper in self._papers.values():
+            paper.links = paper.links & valid_labels
 
     # ── Queries ────────────────────────────────────────────────────────────
 
@@ -134,6 +215,32 @@ class ExamPaperRegistry:
         if paper is None:
             return False
         paper.constraints.discard(code.strip().upper())
+        return True
+
+    def add_study_paper(self, grade: str, pinned_slot: int | None = None) -> ExamPaper:
+        """
+        Add a Study (ST) paper for a grade.
+        Study papers have no student IDs, are always pinned, and act as
+        hard slot blockers for their grade. Label: ST_P{n}_Gr{grade}.
+        """
+        existing = self.papers_for_subject_grade("ST", grade)
+        next_num = max((p.paper_number for p in existing), default=0) + 1
+        paper = ExamPaper(
+            grade        = grade,
+            subject      = "ST",
+            paper_number = next_num,
+            student_ids  = set(),
+            pinned_slot  = pinned_slot,
+        )
+        self._papers[paper.label] = paper
+        return paper
+
+    def remove_study_paper(self, label: str) -> bool:
+        """Remove a study paper by label. Only ST papers can be removed this way."""
+        paper = self._papers.get(label)
+        if paper is None or paper.subject != "ST":
+            return False
+        del self._papers[label]
         return True
 
     # ── Grade / subject listing ────────────────────────────────────────────

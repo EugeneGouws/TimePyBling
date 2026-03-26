@@ -1,13 +1,15 @@
 # TimePyBling
 
-A desktop tool for South African school timetable analysis and exam scheduling. Reads a student timetable, checks it for double-bookings, and builds a dated cross-grade exam timetable with clash-free placement.
+A desktop tool for South African school timetable analysis and exam scheduling.
+Reads a student timetable, checks it for double-bookings, and builds a dated
+cross-grade exam timetable with clash-free placement.
 
 ## Requirements
 
 - Python 3.13
 - `pip install pandas openpyxl reportlab`
 
-> `reportlab` is optional — the schedule can be saved as plain text if it is not installed.
+> `reportlab` is optional — the schedule can be saved as plain text if not installed.
 
 ## Quick start
 
@@ -19,7 +21,9 @@ python main.py
 
 ## Data files
 
-TimePyBling does not ship with student data. On first use, load your timetable from Excel. After configuring papers and dates, save a **state file** (`Save State…` button) so the app can reload without the original Excel file.
+TimePyBling does not ship with student data. On first use, load your timetable
+from Excel. After configuring papers and dates, save a **state file** so the app
+can reload without the original Excel file.
 
 ### First-time setup (Excel)
 
@@ -31,8 +35,7 @@ Place the student timetable in `data/` before launching:
 
 Each timetable cell contains `SUBJECT TEACHERCODE`, e.g. `AF BALAY`.
 
-Auto-load will try these filenames in order:
-
+Auto-load tries these filenames in order:
 ```
 data/ST1 2026.xlsx
 data/ST12026.xlsx
@@ -42,9 +45,12 @@ data/ST1.xlsx
 
 ### Deployed / subsequent use (JSON state file)
 
-After configuring the exam setup, click **Save State…** and save to `data/timetable_state.json`. On subsequent launches the app loads this file automatically — no Excel file required.
+After configuring the exam setup, click **Save State…** and save to
+`data/timetable_state.json`. On subsequent launches the app loads this file
+automatically — no Excel file required.
 
-The state file stores the full timetable tree, exclusions, papers (P1/P2/P3), and session date settings.
+The state file stores the full timetable tree, exclusions, papers (P1/P2/P3),
+constraint codes, difficulty settings, linked papers, and session date settings.
 
 ---
 
@@ -52,14 +58,18 @@ The state file stores the full timetable tree, exclusions, papers (P1/P2/P3), an
 
 ### Timetable
 
-Browse the loaded timetable as a tree: Block → SubBlock → Class → Students. A live search box filters by student ID or class label anywhere in the tree.
+Browse the loaded timetable as a tree: Block → SubBlock → Class → Students.
+Click any class to see its student list. A live search box filters by student
+ID or class label anywhere in the tree.
 
 ### Verification
 
 Two checks run against the loaded timetable:
 
-- **Student double-bookings** — any student appearing in two classes in the same subblock.
-- **Teacher qualification check** — flags teachers assigned to subjects outside their declared subject pool (requires a teachers file loaded separately).
+- **Student double-bookings** — any student appearing in two classes in the
+  same subblock.
+- **Teacher qualification check** — flags teachers assigned to subjects outside
+  their declared subject pool (requires a teachers file loaded separately).
 
 This tab is shown automatically after any timetable load.
 
@@ -69,52 +79,89 @@ Build a dated exam timetable across all grades in one pass.
 
 **Setting up papers**
 
-The exam tree shows every grade and subject found in the timetable. Each subject starts with one paper (P1). You can:
+The exam tab shows a subject × grade matrix. Each cell shows the papers active
+for that subject in that grade. Click any cell to open a detail popout where you can:
 
-- Select subjects and add a P2 or P3 paper (up to three papers per subject per grade).
-- Tag any paper with a constraint code (e.g. a venue code like `C6`). Papers sharing a constraint code cannot be placed in the same slot, even across grades with no shared students.
+- Add or remove papers (P1/P2/P3)
+- Set difficulty (Red / Yellow / Green) — subject-wide
+- Add constraint codes (e.g. venue codes like `C6`)
+- Link papers (e.g. Music P1 + P2 placed on the same day)
+- Pin a paper to a specific date and session
 
 Subjects excluded by default: `ST`, `LIB`, `PE`, `RDI`.
 
+Use the **[ST+]** button to add Study blocks — these pin a grade to a specific
+date/session as a hard slot reservation.
+
+**Difficulty rules**
+
+- Red papers are isolated as much as possible. Red cannot share a day with
+  another Red or Yellow paper.
+- Yellow papers can share a day with other Yellow or Green papers, but not Red.
+- Green papers have no day-level restrictions.
+- AM sessions are always filled before PM sessions are used.
+
+**Linked papers**
+
+Linked papers (e.g. Music P1 and P2) are placed consecutively — P1 in AM,
+P2 in PM of the same day. Linked partners are exempt from difficulty clash
+rules with each other.
+
 **Generating the schedule**
 
-Set a start date, end date, and AM/PM toggles, then click **Generate**. The scheduler places all papers — all grades, all papers — in a single cross-grade pass.
+Set a start date, end date, and AM/PM toggles in the left panel, then click
+**Generate**. The scheduler places all papers across all grades in a single pass.
 
-**Viewing the schedule**
+**Cost function**
 
-Click **Export / View All** to open the full cross-grade schedule in a popout window. Clicking any subject code in the grid closes the popout and navigates directly to that subject in the exam tree.
-
-Export the schedule to PDF (requires `reportlab`) or plain text from the popout.
+The right panel shows the scheduling cost function with editable weights.
+Adjust the values and click **Rebuild Cost Function** to re-run the schedule
+with the new weights. Click **Breakdown** to see which papers contributed to
+each penalty.
 
 **Saving and restoring state**
 
-Use **Save State…** / **Load State…** (top-left of the exam tree panel) to save or restore the full configuration (timetable data, exclusions, papers, dates) to a JSON file.
+Use **Save State…** / **Load State…** to save or restore the full configuration
+to a JSON file.
 
 ---
 
 ## Scheduling algorithm
 
-All papers across all grades are scheduled simultaneously. Grade-by-grade scheduling is not used because constraint codes create hard clashes between grades even when no students overlap.
+All papers across all grades are scheduled simultaneously.
+
+**Step 0 — Study block reservation**
+Pinned ST (study) papers are placed first, reserving grade/slot pairs that no
+other paper for that grade may use.
+
+**Step 0.5 — Linked paper pre-placement**
+Linked pairs are placed before the main pass. P1 takes the best valid slot;
+P2 is placed in the next slot (same day PM). Fallback with warning if blocked.
 
 **Step 1 — Priority placement (MA and PH)**
-
-Maths and Physical Science papers are placed first, from Gr12 down. For each paper the algorithm picks the valid slot that maximises the gap to other papers of the same subject within the same grade (e.g. MA P1 and MA P2 for Gr12 are spread as far apart as possible).
+Maths and Physical Science papers are placed first, from Gr12 down, maximising
+the gap between same-subject same-grade papers.
 
 **Step 2 — DSatur for remaining papers**
-
-Remaining papers are sorted by student count (largest first), then placed using the DSatur graph-colouring heuristic. Papers with more neighbours in the clash graph are assigned first; ties are broken by student count then grade.
+Remaining papers are sorted by student count then placed using the DSatur
+graph-colouring heuristic.
 
 **Step 3 — Spacing pass**
+Same-subject same-grade papers in the same ISO week are flagged and swapped
+to a better slot if one exists.
 
-After initial placement the algorithm checks whether any same-subject, same-grade papers landed in the same calendar week. Non-priority papers are swapped to a better slot if one exists with no new clashes. Remaining same-week pairs are flagged as warnings in the output.
+**Step 4 — Teacher marking pass**
+Same subject + same teacher code in the same slot across grades is flagged.
 
-**Hell week diagnostic**
-
-Any grade where a student has four or more exams in one week is flagged in the output.
+**Step 5 — Hill-climb**
+Quadratic penalty optimisation over 20 passes:
+- Day penalty: k*(k-1)*day_density_factor per student
+- Week penalty: (k-1)*(k+week_density_base)//2 per student
+- AM-first tiebreak: equal-cost moves prefer AM slots
 
 **Slots**
-
-Two sessions per day (AM / PM). Weekends are skipped. Slot 0 = Day 1 AM, Slot 1 = Day 1 PM, Slot 2 = Day 2 AM, and so on.
+Two sessions per day (AM / PM). Weekends are skipped.
+Slot 0 = Day 1 AM, Slot 1 = Day 1 PM, Slot 2 = Day 2 AM, and so on.
 
 ---
 
@@ -124,18 +171,32 @@ Two sessions per day (AM / PM). Weekends are skipped. Slot 0 = Day 1 AM, Slot 1 
 TimePyBling/
 ├── main.py
 ├── data/
-│   └── timetable_state.json   # generated by Save State — loaded on startup
+│   └── timetable_state.json     # generated by Save State — loaded on startup
 ├── core/
-│   ├── timetable_tree.py      # Parse ST1.xlsx → TimetableTree; JSON serialisation
-│   └── conflict_matrix.py     # Shared-student conflict utility
-└── reader/
-│   ├── exam_tree.py           # Reorganise TimetableTree by grade + subject
-│   ├── exam_paper.py          # ExamPaper model and ExamPaperRegistry
-│   ├── exam_clash.py          # Clash graph — student clashes + constraint clashes
-│   ├── exam_scheduler.py      # Cross-grade priority scheduler → ScheduleResult
-│   └── verify_timetable.py    # Student double-booking detection
+│   ├── timetable_tree.py        # Parse ST1.xlsx → TimetableTree; JSON serialisation
+│   └── conflict_matrix.py       # Shared-student conflict utility
+├── reader/
+│   ├── exam_tree.py             # Reorganise TimetableTree by grade + subject
+│   ├── exam_paper.py            # ExamPaper model and ExamPaperRegistry
+│   ├── exam_clash.py            # Clash graph — student + constraint clashes
+│   ├── exam_scheduler.py        # Cross-grade priority scheduler → ScheduleResult
+│   └── verify_timetable.py      # Student double-booking detection
+├── app/
+│   ├── state.py                 # AppState dataclass — single source of truth
+│   ├── events.py                # EventBus + event constants
+│   ├── controller.py            # AppController — no tkinter
+│   └── cost_config.py           # CostConfig dataclass — scheduler weights
+├── file_io/
+│   ├── timetable_reader.py      # Wraps build_timetable_tree_from_file
+│   ├── state_repo.py            # StateRepository save/load
+│   └── export.py                # to_pdf() and to_txt()
 └── ui/
-    └── ui.py                  # Tkinter interface (3 tabs)
+    ├── app.py                   # Thin shell — under 80 lines
+    ├── constants.py             # UI colour and layout constants
+    └── tabs/
+        ├── timetable.py         # TimetableTab
+        ├── verification.py      # VerificationTab
+        └── exam.py              # ExamTab
 ```
 
 ### Key data models
@@ -144,26 +205,43 @@ TimePyBling/
 |---|---|---|
 | `TimetableTree` | `core/timetable_tree.py` | Block → SubBlock → ClassList → StudentList |
 | `ExamTree` | `reader/exam_tree.py` | GradeNode → ExamSubject → ClassList |
-| `ExamPaper` | `reader/exam_paper.py` | One schedulable exam event (subject + paper number + grade) |
-| `ExamPaperRegistry` | `reader/exam_paper.py` | All papers; add/remove P2/P3; constraint codes |
-| `ScheduleResult` | `reader/exam_scheduler.py` | Dated slot assignments + warnings |
+| `ExamPaper` | `reader/exam_paper.py` | One schedulable exam event |
+| `ExamPaperRegistry` | `reader/exam_paper.py` | All papers; difficulty; links; constraints |
+| `CostConfig` | `app/cost_config.py` | Scheduler penalty weights |
+| `ScheduleResult` | `reader/exam_scheduler.py` | Dated slot assignments + warnings + penalty log |
 
 ### Label formats
 
-**Class labels** follow `SUBJECT_TEACHERCODE_GRADE` — e.g. `AF_BALAY_08`, `MA_ALLEN_10`. Grade is zero-padded. `OD` merges to `DR` at parse time.
+**Class labels:** `SUBJECT_TEACHERCODE_GRADE` — e.g. `AF_BALAY_08`, `MA_ALLEN_10`
 
-**Paper labels** follow `SUBJECT_P{n}_GRADE` — e.g. `MA_P1_Gr12`, `EN_P2_Gr10`.
+**Paper labels:** `SUBJECT_P{n}_GRADE` — e.g. `MA_P1_Gr12`, `EN_P2_Gr10`
+
+**Study paper labels:** `ST_P{n}_Gr{grade}` — e.g. `ST_P1_Gr12`
 
 ### State file format
 
-The JSON state file (`data/timetable_state.json`) contains:
-
 ```json
 {
-  "timetable_tree": { "A": { "A1": { "AF_BALAY_08": [361, 370, ...] } } },
-  "exclusions": ["LIB", "PE", "RDI", "ST"],
-  "papers": { "MA_12": ["P1", "P2", "P3"] },
-  "session": { "start": "2026-10-12", "end": "2026-11-06", "am": true, "pm": true }
+  "timetable_tree": {"A": {"A1": {"AF_BALAY_08": [361, 370]}}},
+  "exclusions": ["LIB", "PE", "RDI"],
+  "cost_config": {
+    "same_week_penalty": 1,
+    "teacher_load_penalty": 1,
+    "day_density_factor": 5,
+    "week_density_base": 6,
+    "enforce_student_clash": true,
+    "enforce_constraint_code": true
+  },
+  "papers": {
+    "MA_12": {
+      "papers": ["P1", "P2", "P3"],
+      "constraints": ["C6"],
+      "difficulty": "red",
+      "links": [],
+      "pinned_slot": null
+    }
+  },
+  "session": {"start": "2026-10-12", "end": "2026-11-06", "am": true, "pm": true}
 }
 ```
 
@@ -173,3 +251,4 @@ The JSON state file (`data/timetable_state.json`) contains:
 
 - Per-student printable exam timetable
 - Simulated annealing timetable optimiser
+- Phase 2: web UI via FastAPI
