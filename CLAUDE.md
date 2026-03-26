@@ -85,8 +85,12 @@ Two-digit columns (F25–F67) are exam columns — excluded by regex.
 
 ## Mistakes log — update after every mistake
 
-2026-03-25 — Named file I/O layer io/ which clashes with Python stdlib io module 
-             (pre-loaded at startup). Renamed to file_io/. Never use stdlib module 
+2026-03-26 — Column names hardcoded as "Name"/"Surname" in timetable_tree.py but
+             actual Excel file has "SFirstname"/"SSurname". Student names weren't
+             loading. Fixed column mapping in core/timetable_tree.py.
+
+2026-03-25 — Named file I/O layer io/ which clashes with Python stdlib io module
+             (pre-loaded at startup). Renamed to file_io/. Never use stdlib module
              names for package folders.
 
 ## Known bugs — fix in next session
@@ -98,15 +102,14 @@ Two-digit columns (F25–F67) are exam columns — excluded by regex.
 
 ## Backlog features — do not implement without instruction
 
-- Timetable tab: clicking a class/lesson node in the timetable tree 
-  should display the full student list for that class in a detail panel 
-  or popout. Currently clicking does nothing.
+- ✓ COMPLETED 2026-03-26: Timetable tab: clicking a class in the subblock popout
+  displays student names. Implementation: two-column popout (classes + students).
 
-- Timetable tab: right-click on an empty subblock cell should show a 
+- Timetable tab: right-click on an empty subblock cell should show a
   context menu to add LIB, ST, or BAT to that slot.
   Rules:
     - ST can only be added to student rows
-    - BAT can only be added to teacher rows  
+    - BAT can only be added to teacher rows
     - LIB available to both
-  This requires understanding whether a row is a student or teacher 
+  This requires understanding whether a row is a student or teacher
   context — factor that into the design.
