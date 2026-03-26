@@ -113,12 +113,6 @@ class TimetableTab(tk.Frame):
         self._entity_search_entry.pack(side=tk.LEFT, padx=(0, 6))
         self._entity_value_var.trace_add("write", self._on_entity_search_change)
 
-        tk.Button(sel, text="View Timetable",
-                  command=self._on_view_timetable,
-                  bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                  font=("Calibri", 11, "bold"), padx=12, pady=3
-                  ).pack(side=tk.LEFT)
-
         list_frame = tk.Frame(right, bg=CLR_WHITE)
         list_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
@@ -260,13 +254,6 @@ class TimetableTab(tk.Frame):
             value = self._entity_listbox.get(sel[0])
             self._entity_value_var.set(value)
             self._refresh_entity_grid(self._entity_type_var.get(), value)
-
-    def _on_view_timetable(self):
-        etype = self._entity_type_var.get()
-        value = self._entity_value_var.get().strip()
-        if not value or not self._controller.state.timetable_tree:
-            return
-        self._refresh_entity_grid(etype, value)
 
     # ------------------------------------------------------------------
     # Subblock popup
