@@ -18,6 +18,9 @@ class TimetableTab(tk.Frame):
         self._controller = controller
         self._bus = bus
         self._subblock_popup: tk.Toplevel | None = None
+        self._popup_classes_listbox: tk.Listbox | None = None
+        self._popup_students_listbox: tk.Listbox | None = None
+        self._popup_subblock: object | None = None
 
         self._build()
 
@@ -281,35 +284,96 @@ class TimetableTab(tk.Frame):
         if not block:
             return
         sb = block.subblocks.get(subblock_name)
+        if not sb or not sb.class_lists:
+            return
+
+        self._popup_subblock = sb
 
         win = tk.Toplevel(self)
         self._subblock_popup = win
         win.title(f"Subblock {subblock_name}")
         win.configure(bg=CLR_WHITE)
         win.resizable(True, True)
+        win.geometry("400x300")
 
+        # Title
         tk.Label(win, text=f"Classes in {subblock_name}",
                  font=("Calibri", 12, "bold"),
                  fg=CLR_BLUE, bg=CLR_WHITE).pack(padx=14, pady=(10, 4))
 
-        frame = tk.Frame(win, bg=CLR_WHITE)
-        frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 4))
+        # Two-column container
+        container = tk.Frame(win, bg=CLR_WHITE)
+        container.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 4))
 
-        if not sb or not sb.class_lists:
-            tk.Label(frame, text="(no classes)", fg="#9CA3AF",
-                     bg=CLR_WHITE, font=("Calibri", 10)).pack()
-        else:
-            for label in sorted(sb.class_lists):
-                cl = sb.class_lists[label]
-                count = len(cl.student_list)
-                tk.Label(frame, text=f"  {label}   ({count} students)",
-                         bg=CLR_WHITE, fg="#1E293B", font=("Calibri", 10),
-                         anchor="w").pack(fill=tk.X)
+        # LEFT — Classes listbox
+        left_frame = tk.Frame(container, bg=CLR_WHITE)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
+        tk.Label(left_frame, text="Classes", bg=CLR_WHITE,
+                 font=("Calibri", 10, "bold"), fg="#1E293B").pack(anchor="w", pady=(0, 2))
+
+        self._popup_classes_listbox = tk.Listbox(left_frame, height=12,
+                                                  font=("Calibri", 10),
+                                                  relief=tk.SOLID, bd=1,
+                                                  bg=CLR_WHITE,
+                                                  selectbackground=CLR_ORANGE,
+                                                  selectforeground=CLR_WHITE,
+                                                  selectmode=tk.SINGLE)
+        classes_sb = ttk.Scrollbar(left_frame, orient=tk.VERTICAL,
+                                   command=self._popup_classes_listbox.yview)
+        classes_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._popup_classes_listbox.config(yscrollcommand=classes_sb.set)
+        self._popup_classes_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._popup_classes_listbox.bind("<<ListboxSelect>>", self._on_popup_class_selected)
+
+        # Populate classes
+        for label in sorted(sb.class_lists):
+            self._popup_classes_listbox.insert(tk.END, label)
+
+        # RIGHT — Students listbox
+        right_frame = tk.Frame(container, bg=CLR_WHITE)
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+
+        tk.Label(right_frame, text="Students", bg=CLR_WHITE,
+                 font=("Calibri", 10, "bold"), fg="#1E293B").pack(anchor="w", pady=(0, 2))
+
+        self._popup_students_listbox = tk.Listbox(right_frame, height=12,
+                                                   font=("Calibri", 10),
+                                                   relief=tk.SOLID, bd=1,
+                                                   bg=CLR_WHITE,
+                                                   selectbackground=CLR_ORANGE,
+                                                   selectforeground=CLR_WHITE,
+                                                   selectmode=tk.SINGLE)
+        students_sb = ttk.Scrollbar(right_frame, orient=tk.VERTICAL,
+                                    command=self._popup_students_listbox.yview)
+        students_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._popup_students_listbox.config(yscrollcommand=students_sb.set)
+        self._popup_students_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Close button
         tk.Button(win, text="Close", command=win.destroy,
                   bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Calibri", 10, "bold"), padx=14
                   ).pack(pady=(0, 10))
+
+    def _on_popup_class_selected(self, *_):
+        if not self._popup_classes_listbox or not self._popup_subblock:
+            return
+
+        sel = self._popup_classes_listbox.curselection()
+        if not sel:
+            return
+
+        class_label = self._popup_classes_listbox.get(sel[0])
+        cl = self._popup_subblock.class_lists.get(class_label)
+        if not cl:
+            return
+
+        # Populate students listbox with sorted student names
+        self._popup_students_listbox.delete(0, tk.END)
+        for student_id in sorted(cl.student_list.students):
+            student_name = self._student_display(student_id)
+            self._popup_students_listbox.insert(tk.END, student_name)
 
     # ------------------------------------------------------------------
     # Entity grid
