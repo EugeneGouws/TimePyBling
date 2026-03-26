@@ -320,16 +320,16 @@ def build_timetable_tree_from_file(st_file_path) -> TimetableTree:
 
     tree = TimetableTree()
 
-    # Build student_names lookup from Name/Surname columns if present
-    has_name    = "Name"    in df.columns
-    has_surname = "Surname" in df.columns
+    # Build student_names lookup from SFirstname/SSurname columns if present
+    has_firstname = "SFirstname" in df.columns
+    has_surname   = "SSurname"   in df.columns
     for _, row in df.iterrows():
         sid = int(row["Studentid"])
         parts = []
-        if has_name and not pd.isna(row.get("Name")):
-            parts.append(str(row["Name"]).strip())
-        if has_surname and not pd.isna(row.get("Surname")):
-            parts.append(str(row["Surname"]).strip())
+        if has_surname and not pd.isna(row.get("SSurname")):
+            parts.append(str(row["SSurname"]).strip())
+        if has_firstname and not pd.isna(row.get("SFirstname")):
+            parts.append(str(row["SFirstname"]).strip())
         if parts:
             tree.student_names[sid] = " ".join(parts)
 
