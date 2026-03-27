@@ -50,10 +50,11 @@ class StateRepository:
             "cost_config": asdict(cost),
             "papers": papers,
             "session": {
-                "start": cfg.start.isoformat() if cfg else None,
-                "end":   cfg.end.isoformat()   if cfg else None,
-                "am":    cfg.am                 if cfg else True,
-                "pm":    cfg.pm                 if cfg else True,
+                "start":             cfg.start.isoformat()     if cfg else None,
+                "end":               cfg.end.isoformat()       if cfg else None,
+                "am":                cfg.am                    if cfg else True,
+                "pm":                cfg.pm                    if cfg else True,
+                "excluded_sessions": cfg.excluded_sessions      if cfg else [],
             },
         }
         path = Path(path)
@@ -80,6 +81,7 @@ class StateRepository:
                 end=end,
                 am=bool(s.get("am", True)),
                 pm=bool(s.get("pm", True)),
+                excluded_sessions=list(s.get("excluded_sessions", [])),
             )
 
         if "cost_config" in data:

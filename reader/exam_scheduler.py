@@ -379,8 +379,9 @@ def build_schedule(
             grade_reserved_slots[p.grade].add(assignment[p.label])
 
     # ── Step 0.5: Linked paper pre-placement ────────────────────────────────────
-    #    Place linked pairs together before priority / DSatur passes.
-    #    Primary (more students) at best slot; partner at slot±1 or fallback.
+    #    Place linked pairs before priority / DSatur passes.
+    #    Primary is placed in an AM slot (even index); partner is placed in the
+    #    PM slot of the same day (primary_slot + 1).  Falls back if PM blocked.
 
     warnings: dict[str, list[str]] = {p.label: [] for p in papers}
     linked_label_set: set[str] = set()
@@ -410,38 +411,38 @@ def build_schedule(
     )
 
     for primary, partner in linked_pairs:
-        # Place primary at best valid slot
+        # Place primary at best valid AM slot (even index = AM)
         reserved = grade_reserved_slots.get(primary.grade, set())
         forbidden = {assignment[nb] for nb in graph[primary.label]
                      if nb in assignment}
-        valid = [s for s in range(num_slots)
+        am_slots = [s for s in range(0, num_slots, 2)]   # even indices = AM
+        valid = [s for s in am_slots
                  if s not in forbidden and s not in reserved
                  and _difficulty_allows(registry, primary, s, assignment,
                                         paper_map, exam_slots)]
         if not valid:
-            valid = [s for s in range(num_slots)
+            # Relax difficulty constraint, still prefer AM
+            valid = [s for s in am_slots
                      if s not in forbidden and s not in reserved] \
-                    or list(range(num_slots))
+                    or am_slots or list(range(num_slots))
         best = _pick_spread_slot(valid, assignment, primary.label, num_slots)
         assignment[primary.label] = best
         linked_label_set.add(primary.label)
 
-        # Place partner adjacent: try slot+1, then slot-1, then fallback
+        # Place partner in the PM slot of the same day (best + 1)
+        pm_slot = best + 1  # AM slot is even, so AM+1 is PM of same day
         reserved_p = grade_reserved_slots.get(partner.grade, set())
         forbidden_p = {assignment[nb] for nb in graph[partner.label]
                        if nb in assignment}
-        placed = False
-        for try_slot in [best + 1, best - 1]:
-            if (0 <= try_slot < num_slots
-                    and try_slot not in forbidden_p
-                    and try_slot not in reserved_p
-                    and _difficulty_allows(registry, partner, try_slot,
-                                           assignment, paper_map, exam_slots)):
-                assignment[partner.label] = try_slot
-                linked_label_set.add(partner.label)
-                placed = True
-                break
-        if not placed:
+        if (pm_slot < num_slots
+                and pm_slot not in forbidden_p
+                and pm_slot not in reserved_p
+                and _difficulty_allows(registry, partner, pm_slot,
+                                       assignment, paper_map, exam_slots)):
+            assignment[partner.label] = pm_slot
+            linked_label_set.add(partner.label)
+        else:
+            # Fallback: place independently with a warning
             valid_p = [s for s in range(num_slots)
                        if s not in forbidden_p and s not in reserved_p
                        and _difficulty_allows(registry, partner, s, assignment,
@@ -456,7 +457,7 @@ def build_schedule(
             linked_label_set.add(partner.label)
             warnings[partner.label].append(
                 f"Linked to {primary.label} (slot {best + 1}) "
-                f"— could not place adjacent"
+                f"— could not place in PM of same day, placed independently"
             )
 
     # ── Step 1: Priority placement ─────────────────────────────────────────────

@@ -46,3 +46,7 @@ CLR_DIFF_GRAY   = "#E5E7EB"
 # Matrix interaction
 CLR_HOVER       = "#BFDBFE"
 CLR_ST_ROW      = "#EDE9FE"
+
+# Default cost-function weights (0-100, should sum to 100)
+WEIGHT_STUDENT_STRESS:  int = 50
+WEIGHT_TEACHER_MARKING: int = 50

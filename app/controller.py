@@ -6,7 +6,9 @@ from app.events import EventBus
 from app.state import AppState, SessionConfig
 from reader.exam_tree import build_exam_tree_from_timetable_tree
 from reader.exam_paper import ExamPaperRegistry
-from reader.exam_scheduler import build_schedule, ScheduleResult, PenaltyEntry
+from reader.exam_scheduler import (
+    build_schedule, ScheduleResult, ScheduledPaper, PenaltyEntry,
+)
 
 # Event name constants
 EVT_TIMETABLE_LOADED    = "timetable_loaded"
@@ -111,7 +113,10 @@ class AppController:
     def set_difficulty(self, subject: str, grade: str, difficulty: str) -> None:
         if self._state.paper_registry is None:
             raise ValueError("paper_registry is not built")
-        self._state.paper_registry.set_difficulty(subject, grade, difficulty)
+        registry = self._state.paper_registry
+        for g in registry.grades():
+            if registry.papers_for_subject_grade(subject, g):
+                registry.set_difficulty(subject, g, difficulty)
         self._bus.publish(EVT_PAPERS_CHANGED, state=self._state)
 
     def add_link(self, label_a: str, label_b: str) -> None:
@@ -304,3 +309,122 @@ class AppController:
         self._state.schedule_result = result
         self._bus.publish(EVT_SCHEDULE_GENERATED, state=self._state)
         return result
+
+    def optimise_schedule(
+        self,
+        stress_weight: int,
+        marking_weight: int,
+        max_iterations: int = 10_000,
+    ) -> tuple[float, float]:
+        """
+        Run the hill-climb optimiser over the current schedule result.
+
+        Returns (old_cost, new_cost) using the two-weight cost function.
+        Publishes EVT_SCHEDULE_GENERATED after updating state.
+        """
+        from core.cost_function import StudentStressCost, TeacherMarkingCost, TotalCost  # noqa: PLC0415
+        from core.hill_climb import hill_climb                                            # noqa: PLC0415
+
+        result   = self._state.schedule_result
+        if result is None:
+            raise ValueError("No schedule to optimise — generate one first")
+        exam_tree = self._state.exam_tree
+        registry  = self._state.paper_registry
+        if exam_tree is None or registry is None:
+            raise ValueError("exam_tree and paper_registry must be available")
+
+        schedule, ordered_days = _build_schedule_dict(result)
+
+        stress  = StudentStressCost(exam_tree, registry, stress_weight)
+        marking = TeacherMarkingCost(exam_tree, registry, marking_weight)
+        cost_fn = TotalCost(stress, marking)
+
+        old_cost                  = cost_fn.compute(schedule)
+        new_schedule, new_cost    = hill_climb(schedule, cost_fn, max_iterations)
+
+        self._state.schedule_result = _rebuild_schedule_result(
+            new_schedule, result, ordered_days
+        )
+        self._bus.publish(EVT_SCHEDULE_GENERATED, state=self._state)
+        return old_cost, new_cost
+
+
+# ── Schedule dict helpers (module-level) ──────────────────────────────────────
+
+def _build_schedule_dict(
+    result: ScheduleResult,
+) -> tuple[dict, list]:
+    """
+    Convert a ScheduleResult into the hill-climb schedule format.
+
+    Returns
+    -------
+    schedule : {(day_int, session): list[ExamPaper]}
+        All exam slots initialised; occupied slots contain their papers.
+    ordered_days : list[date]
+        Unique exam dates in timetable order (index = day_int).
+    """
+    # Build ordered unique dates preserving session order
+    date_order: dict = {}
+    for d, _ in result.sessions:
+        if d not in date_order:
+            date_order[d] = len(date_order)
+
+    # Initialise every slot as empty
+    schedule: dict = {(date_order[d], s): [] for d, s in result.sessions}
+
+    # Place papers into slots
+    for sp in result.scheduled:
+        slot_clamped = min(sp.slot_index, len(result.sessions) - 1)
+        slot_date, slot_session = result.sessions[slot_clamped]
+        key = (date_order[slot_date], slot_session)
+        if key in schedule:
+            schedule[key].append(sp.paper)
+
+    ordered_days = sorted(date_order.keys(), key=lambda d: date_order[d])
+    return schedule, ordered_days
+
+
+def _rebuild_schedule_result(
+    new_schedule: dict,
+    original: ScheduleResult,
+    ordered_days: list,
+) -> ScheduleResult:
+    """
+    Reconstruct a ScheduleResult from an optimised schedule dict.
+
+    Warnings and pinned flags are carried over from the original.
+    penalty_log is cleared (it was computed for the pre-optimise placement).
+    """
+    slot_lookup = {(d, s): idx for idx, (d, s) in enumerate(original.sessions)}
+    orig_lookup = {sp.paper.label: sp for sp in original.scheduled}
+
+    scheduled: list[ScheduledPaper] = []
+    for (day_int, session_str), papers in new_schedule.items():
+        day_date = ordered_days[day_int]
+        slot_idx = slot_lookup.get((day_date, session_str))
+        if slot_idx is None:
+            continue
+        for paper in papers:
+            orig_sp = orig_lookup.get(paper.label)
+            scheduled.append(ScheduledPaper(
+                paper      = paper,
+                slot_index = slot_idx,
+                date       = day_date,
+                session    = session_str,
+                warnings   = orig_sp.warnings if orig_sp else [],
+                pinned     = orig_sp.pinned if orig_sp else (paper.pinned_slot is not None),
+            ))
+
+    scheduled.sort(key=lambda sp: sp.slot_index)
+
+    return ScheduleResult(
+        scheduled          = scheduled,
+        total_slots        = original.total_slots,
+        total_days         = original.total_days,
+        sessions           = original.sessions,
+        pin_clash_warnings = original.pin_clash_warnings,
+        teacher_warnings   = original.teacher_warnings,
+        student_cost       = 0,
+        penalty_log        = [],
+    )

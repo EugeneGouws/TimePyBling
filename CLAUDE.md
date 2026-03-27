@@ -142,7 +142,25 @@ git commit -m "subject line
 # this triggers the warning"
 ```
 
+## Bash command rule (enforced)
+
+Always write bash commands as single lines — no multi-line strings, no line
+continuations, no heredocs. Break complex commands with && on one line.
+
+```sh
+# OK
+python -c "import ast; ast.parse(open('f.py').read()); print('OK')"
+
+# NEVER — causes shell break-character errors
+python -c "
+import ast
+ast.parse(open('f.py').read())
+"
+```
+
 ## Mistakes log — update after every mistake
+
+2026-03-27 — Session 5: Clean session, no mistakes.
 
 2026-03-26 — Session 3: Edited ui/ui.py (legacy dead file, 108KB) instead of
              ui/tabs/exam.py. HANDOFF.md clearly states ui/ui.py was deleted

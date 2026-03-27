@@ -14,3 +14,7 @@ class CostConfig:
     # Hard constraint toggles (for display only — not editable weight)
     enforce_student_clash:  bool = True
     enforce_constraint_code: bool = True
+
+    # User-facing priority weights (0-100, sum = 100)
+    student_stress_weight:  int = 50   # relative priority: student stress load
+    teacher_load_weight:    int = 50   # relative priority: teacher marking load

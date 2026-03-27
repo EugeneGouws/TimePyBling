@@ -19,6 +19,7 @@ class SessionConfig:
     end: date
     am: bool = True
     pm: bool = True
+    excluded_sessions: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -13,6 +13,7 @@ from app.controller import (
     EVT_STATE_LOADED,
     EVT_TIMETABLE_LOADED,
 )
+from app.state import SessionConfig
 from ui.constants import (
     SESSIONS,
     CLR_WHITE, CLR_LIGHT, CLR_BG,
@@ -23,6 +24,7 @@ from ui.constants import (
     CLR_DIFF_RED, CLR_DIFF_YELLOW, CLR_DIFF_GREEN, CLR_DIFF_GRAY,
     CLR_HOVER, CLR_ST_ROW,
     DEFAULT_EXAM_START, DEFAULT_EXAM_END,
+    WEIGHT_STUDENT_STRESS, WEIGHT_TEACHER_MARKING,
 )
 from ui.helpers import _scrolled_text, _write, _clear
 
@@ -77,7 +79,7 @@ class ExamTab(tk.Frame):
 
     def _build_left(self, pane: tk.PanedWindow) -> None:
         left = tk.Frame(pane, bg=CLR_WHITE)
-        pane.add(left, minsize=520)
+        pane.add(left, minsize=620)
 
         # ── Header bar ─────────────────────────────────────────────
         hdr = tk.Frame(left, bg=CLR_WHITE)
@@ -156,7 +158,7 @@ class ExamTab(tk.Frame):
 
         # ── Canvas matrix ──────────────────────────────────────────
         self._matrix_frame = tk.Frame(left, bg=CLR_WHITE)
-        self._matrix_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 6))
+        self._matrix_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(4, 0))
 
         self._matrix_canvas = tk.Canvas(
             self._matrix_frame, bg=CLR_WHITE, highlightthickness=0)
@@ -174,18 +176,19 @@ class ExamTab(tk.Frame):
         self._matrix_canvas.bind("<Leave>", self._on_matrix_leave)
         self._matrix_canvas.bind("<Button-1>", self._on_matrix_click)
 
+        self._build_exclusions(left)
+
     def _build_right(self, pane: tk.PanedWindow) -> None:
         right = tk.Frame(pane, bg=CLR_WHITE)
         pane.add(right, minsize=340)
-        self._build_exclusions(right)
+        self._build_constraints_panel(right)
         self._build_scheduler(right)
-        self._build_cost_function(right)
 
     def _build_exclusions(self, parent: tk.Frame) -> None:
         excl_frame = tk.LabelFrame(parent, text="Exam Exclusions",
                                    bg=CLR_WHITE, font=("Calibri", 10, "bold"),
                                    fg=CLR_BLUE, padx=8, pady=6)
-        excl_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+        excl_frame.pack(fill=tk.X, padx=6, pady=(4, 6))
 
         self._excl_listbox = tk.Listbox(
             excl_frame, height=3, font=("Calibri", 10),
@@ -269,51 +272,69 @@ class ExamTab(tk.Frame):
         self._sched_text.tag_config("day_sep", foreground=CLR_MID,
                                     font=("Calibri", 10))
 
-    def _build_cost_function(self, parent: tk.Frame) -> None:
-        cost_lf = tk.LabelFrame(parent, text="Cost Configuration",
-                                 bg=CLR_WHITE, font=("Calibri", 10, "bold"),
-                                 fg=CLR_BLUE, padx=8, pady=6)
-        cost_lf.pack(fill=tk.X, padx=8, pady=(0, 8))
+    def _build_constraints_panel(self, parent: tk.Frame) -> None:
+        lf = tk.LabelFrame(parent, text="Soft Constraints",
+                           bg=CLR_WHITE, font=("Calibri", 10, "bold"),
+                           fg=CLR_BLUE, padx=8, pady=6)
+        lf.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        wf = tk.Frame(cost_lf, bg=CLR_WHITE)
-        wf.pack(fill=tk.X)
+        self._weight_vars: dict[str, tk.IntVar] = {}
+        self._weight_labels: dict[str, tk.Label] = {}
+        self._updating_sliders = False
 
-        cost_fields = [
-            ("day_density_factor", 5),
-            ("week_density_base", 6),
-            ("same_week_penalty", 1),
-            ("teacher_load_penalty", 1),
+        sf = tk.Frame(lf, bg=CLR_WHITE)
+        sf.pack(fill=tk.X)
+        sf.columnconfigure(1, weight=1)
+
+        # Link the two sliders so they always sum to 100
+        def _on_stress(val):
+            if self._updating_sliders:
+                return
+            self._updating_sliders = True
+            x = int(float(val))
+            self._weight_vars["teacher_load_weight"].set(100 - x)
+            self._weight_labels["student_stress_weight"].config(text=f"{x}%")
+            self._weight_labels["teacher_load_weight"].config(text=f"{100 - x}%")
+            self._updating_sliders = False
+
+        def _on_teacher(val):
+            if self._updating_sliders:
+                return
+            self._updating_sliders = True
+            x = int(float(val))
+            self._weight_vars["student_stress_weight"].set(100 - x)
+            self._weight_labels["teacher_load_weight"].config(text=f"{x}%")
+            self._weight_labels["student_stress_weight"].config(text=f"{100 - x}%")
+            self._updating_sliders = False
+
+        rows = [
+            ("student_stress_weight", "Student stress load",   WEIGHT_STUDENT_STRESS,  _on_stress),
+            ("teacher_load_weight",   "Teacher marking load",  WEIGHT_TEACHER_MARKING, _on_teacher),
         ]
-        self._cost_vars: dict[str, tk.StringVar] = {}
-        for i, (field_name, default) in enumerate(cost_fields):
-            r, c = i // 2, (i % 2) * 3
-            tk.Label(wf, text=f"{field_name}:", bg=CLR_WHITE, fg="#1E293B",
-                     font=("Calibri", 10)).grid(row=r, column=c, sticky=tk.W,
-                                                 padx=(0, 2), pady=2)
-            v = tk.StringVar(value=str(default))
-            self._cost_vars[field_name] = v
-            tk.Entry(wf, textvariable=v, font=("Calibri", 10),
-                     relief=tk.SOLID, bd=1, width=5
-                     ).grid(row=r, column=c + 1, sticky=tk.W,
-                             padx=(0, 12), pady=2)
 
-        # Hard constraint display-only checkboxes
-        chk_frame = tk.Frame(cost_lf, bg=CLR_WHITE)
-        chk_frame.pack(fill=tk.X, pady=(4, 0))
-        self._enforce_clash_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(chk_frame, text="enforce_student_clash",
-                       variable=self._enforce_clash_var, state=tk.DISABLED,
-                       bg=CLR_WHITE, fg="#6B7280", font=("Calibri", 9)
-                       ).pack(side=tk.LEFT)
-        self._enforce_constr_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(chk_frame, text="enforce_constraint_code",
-                       variable=self._enforce_constr_var, state=tk.DISABLED,
-                       bg=CLR_WHITE, fg="#6B7280", font=("Calibri", 9)
-                       ).pack(side=tk.LEFT, padx=(8, 0))
+        for i, (key, label, default, cmd) in enumerate(rows):
+            v = tk.IntVar(value=default)
+            self._weight_vars[key] = v
 
-        # Action buttons
-        btn_frame = tk.Frame(cost_lf, bg=CLR_WHITE)
-        btn_frame.pack(fill=tk.X, pady=(4, 0))
+            tk.Label(sf, text=label, bg=CLR_WHITE, fg="#1E293B",
+                     font=("Calibri", 10), width=20, anchor=tk.W
+                     ).grid(row=i, column=0, sticky=tk.W, pady=3)
+
+            pct_lbl = tk.Label(sf, text=f"{default}%", bg=CLR_WHITE,
+                               fg=CLR_ORANGE, font=("Calibri", 10, "bold"),
+                               width=5, anchor=tk.E)
+            pct_lbl.grid(row=i, column=2, sticky=tk.E, padx=(4, 0))
+            self._weight_labels[key] = pct_lbl
+
+            tk.Scale(sf, variable=v, orient=tk.HORIZONTAL,
+                     from_=0, to=100, resolution=1, showvalue=False,
+                     bg=CLR_WHITE, troughcolor=CLR_LIGHT,
+                     highlightthickness=0, command=cmd
+                     ).grid(row=i, column=1, sticky=tk.EW, padx=(6, 4))
+
+        # Action buttons + cost result
+        btn_frame = tk.Frame(lf, bg=CLR_WHITE)
+        btn_frame.pack(fill=tk.X, pady=(6, 0))
         tk.Button(btn_frame, text="Rebuild Schedule",
                   command=self._generate_exam_schedule,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
@@ -322,9 +343,13 @@ class ExamTab(tk.Frame):
                   command=self._open_penalty_breakdown,
                   bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Calibri", 10), padx=10).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Optimise",
+                  command=self._on_optimise,
+                  bg=CLR_ORANGE, fg=CLR_WHITE, relief=tk.FLAT,
+                  font=("Calibri", 10), padx=10).pack(side=tk.LEFT)
 
         self._exam_cost_result_label = tk.Label(
-            cost_lf, text="", bg=CLR_WHITE, fg="#1E293B",
+            lf, text="", bg=CLR_WHITE, fg="#1E293B",
             font=("Calibri", 10), justify=tk.LEFT, anchor=tk.W)
         self._exam_cost_result_label.pack(fill=tk.X, pady=(4, 0))
 
@@ -347,14 +372,31 @@ class ExamTab(tk.Frame):
             self._sched_end_var.set(cfg.end.strftime("%Y-%m-%d"))
             self._am_var.set(cfg.am)
             self._pm_var.set(cfg.pm)
-            self._sessions = None
-        # Restore cost config values
+            if cfg.excluded_sessions:
+                excluded_set = set(cfg.excluded_sessions)
+                full = self._controller.effective_sessions(
+                    cfg.start.strftime("%Y-%m-%d"),
+                    cfg.end.strftime("%Y-%m-%d"),
+                    cfg.am,
+                    cfg.pm,
+                )
+                if full:
+                    self._sessions = [
+                        (d, s) for d, s in full
+                        if f"{d.isoformat()} {s}" not in excluded_set
+                    ]
+                else:
+                    self._sessions = None
+            else:
+                self._sessions = None
+        # Restore soft constraint weights
         cost = state.cost_config
         if cost is not None:
-            self._cost_vars["day_density_factor"].set(str(cost.day_density_factor))
-            self._cost_vars["week_density_base"].set(str(cost.week_density_base))
-            self._cost_vars["same_week_penalty"].set(str(cost.same_week_penalty))
-            self._cost_vars["teacher_load_penalty"].set(str(cost.teacher_load_penalty))
+            stress = cost.student_stress_weight
+            self._weight_vars["student_stress_weight"].set(stress)
+            self._weight_vars["teacher_load_weight"].set(100 - stress)
+            self._weight_labels["student_stress_weight"].config(text=f"{stress}%")
+            self._weight_labels["teacher_load_weight"].config(text=f"{100 - stress}%")
         self._refresh_exclusion_listbox()
         self._populate_matrix()
         self._update_sched_grade_list()
@@ -441,6 +483,10 @@ class ExamTab(tk.Frame):
                     text=text, font=("Calibri", 9), fill="#1E293B")
                 self._cell_ids[(subj, grade)] = rect_id
                 self._cell_text_ids[(subj, grade)] = text_id
+                if papers and any(p.links for p in papers):
+                    canvas.create_text(x2 - 4, y2 - 3, text="\u26d3",
+                                       anchor="se", font=("Calibri", 7),
+                                       fill="#1E40AF")
 
         # ── ST row ──
         st_y1 = HDR_ROW_H + len(subjects) * CELL_H + 4
@@ -647,32 +693,95 @@ class ExamTab(tk.Frame):
             # ── Links ──
             tk.Label(inner, text="Links:", bg=CLR_WHITE, fg="#1E293B",
                      font=("Calibri", 10, "bold")).pack(anchor=tk.W, pady=(8, 2))
+
+            # Active link display
             current_links: set[str] = set()
             for p in papers:
                 current_links |= p.links
             if current_links:
                 for link_label in sorted(current_links):
-                    lf = tk.Frame(inner, bg=CLR_WHITE)
-                    lf.pack(fill=tk.X, pady=1)
-                    tk.Label(lf, text=link_label, bg=CLR_WHITE, fg="#1E293B",
-                             font=("Calibri", 10)).pack(side=tk.LEFT, padx=4)
-                    tk.Button(lf, text="x",
+                    lf = tk.Frame(inner, bg="#EFF6FF", bd=1, relief=tk.SOLID)
+                    lf.pack(fill=tk.X, pady=2)
+                    tk.Label(lf, text=f"\u2194  {link_label}", bg="#EFF6FF",
+                             fg=CLR_BLUE, font=("Calibri", 10, "bold"),
+                             padx=6).pack(side=tk.LEFT)
+                    tk.Button(lf, text="Unlink",
                               command=lambda ll=link_label: _remove_link(ll),
                               bg=CLR_RED, fg=CLR_WHITE, relief=tk.FLAT,
-                              font=("Calibri", 9), padx=4).pack(side=tk.LEFT)
+                              font=("Calibri", 9), padx=6).pack(side=tk.RIGHT, padx=4, pady=2)
             else:
                 tk.Label(inner, text="  (none)", bg=CLR_WHITE, fg="#6B7280",
                          font=("Calibri", 10)).pack(anchor=tk.W)
 
-            link_row = tk.Frame(inner, bg=CLR_WHITE)
-            link_row.pack(fill=tk.X, pady=(2, 0))
-            link_entry = tk.Entry(link_row, font=("Calibri", 10),
-                                  relief=tk.SOLID, bd=1, width=18)
-            link_entry.pack(side=tk.LEFT, padx=(0, 4))
-            tk.Button(link_row, text="Add Link",
-                      command=lambda: _add_link(link_entry.get()),
-                      bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
-                      font=("Calibri", 10), padx=6).pack(side=tk.LEFT)
+            # Link picker: checkboxes for all unlinked papers
+            tk.Label(inner, text="Link papers (select exactly 2):",
+                     bg=CLR_WHITE, fg="#1E293B",
+                     font=("Calibri", 9)).pack(anchor=tk.W, pady=(6, 2))
+
+            picker_outer = tk.Frame(inner, bg=CLR_WHITE,
+                                    relief=tk.SOLID, bd=1)
+            picker_outer.pack(fill=tk.X, pady=(0, 4))
+            picker_canvas = tk.Canvas(picker_outer, bg=CLR_WHITE,
+                                      highlightthickness=0, height=130)
+            picker_sb = ttk.Scrollbar(picker_outer, orient=tk.VERTICAL,
+                                      command=picker_canvas.yview)
+            picker_sb.pack(side=tk.RIGHT, fill=tk.Y)
+            picker_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            picker_canvas.configure(yscrollcommand=picker_sb.set)
+            picker_inner = tk.Frame(picker_canvas, bg=CLR_WHITE)
+            picker_canvas.create_window((0, 0), window=picker_inner, anchor="nw")
+
+            link_check_vars: dict[str, tk.BooleanVar] = {}
+            link_btn_ref: list[tk.Button] = []
+
+            def _on_check_changed():
+                checked = [lbl for lbl, v in link_check_vars.items() if v.get()]
+                state = tk.NORMAL if len(checked) == 2 else tk.DISABLED
+                if link_btn_ref:
+                    link_btn_ref[0].config(state=state)
+
+            def _do_link():
+                checked = [lbl for lbl, v in link_check_vars.items() if v.get()]
+                if len(checked) == 2:
+                    try:
+                        self._controller.add_link(checked[0], checked[1])
+                    except ValueError as e:
+                        messagebox.showwarning("Invalid link", str(e), parent=top)
+                        return
+                    _refresh_popout()
+
+            # Current cell's papers at top, then all others
+            all_papers = sorted(registry.all_papers(), key=lambda p: (
+                0 if (p.subject == subject and p.grade == grade) else 1,
+                p.label))
+            for ap in all_papers:
+                if ap.label in current_links:
+                    continue  # already linked, shown above
+                var = tk.BooleanVar(value=False)
+                link_check_vars[ap.label] = var
+                is_own = (ap.subject == subject and ap.grade == grade)
+                row_bg = "#F0F9FF" if is_own else CLR_WHITE
+                tk.Checkbutton(
+                    picker_inner,
+                    text=f"{ap.label}  ({ap.student_count()} students)",
+                    variable=var,
+                    command=_on_check_changed,
+                    bg=row_bg, fg="#1E293B",
+                    selectcolor=CLR_BLUE,
+                    font=("Calibri", 9),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, padx=4, pady=1)
+
+            picker_inner.update_idletasks()
+            picker_canvas.configure(scrollregion=picker_canvas.bbox("all"))
+
+            link_btn = tk.Button(inner, text="Link Selected",
+                                 command=_do_link,
+                                 state=tk.DISABLED,
+                                 bg=CLR_BLUE, fg=CLR_WHITE, relief=tk.FLAT,
+                                 font=("Calibri", 10), padx=8)
+            link_btn.pack(anchor=tk.W, pady=(0, 4))
+            link_btn_ref.append(link_btn)
 
             # ── Constraints ──
             tk.Label(inner, text="Constraints:", bg=CLR_WHITE, fg="#1E293B",
@@ -730,18 +839,6 @@ class ExamTab(tk.Frame):
 
         def _set_difficulty(value: str):
             self._controller.set_difficulty(subject, grade, value)
-            _refresh_popout()
-
-        def _add_link(target_label: str):
-            target_label = target_label.strip()
-            if not target_label:
-                return
-            # Link from the first paper
-            try:
-                self._controller.add_link(papers[0].label, target_label)
-            except ValueError as e:
-                messagebox.showwarning("Invalid link", str(e), parent=top)
-                return
             _refresh_popout()
 
         def _remove_link(target_label: str):
@@ -1004,21 +1101,14 @@ class ExamTab(tk.Frame):
                 "Check AM/PM checkboxes and date range.")
             return
 
-        # Build CostConfig from UI entries
+        # Build CostConfig from soft constraint sliders
         from app.cost_config import CostConfig  # noqa: PLC0415
-        try:
-            config = CostConfig(
-                day_density_factor=int(float(
-                    self._cost_vars["day_density_factor"].get())),
-                week_density_base=int(float(
-                    self._cost_vars["week_density_base"].get())),
-                same_week_penalty=int(float(
-                    self._cost_vars["same_week_penalty"].get())),
-                teacher_load_penalty=int(float(
-                    self._cost_vars["teacher_load_penalty"].get())),
-            )
-        except (ValueError, KeyError):
-            config = CostConfig()
+        stress  = self._weight_vars["student_stress_weight"].get()
+        teacher = self._weight_vars["teacher_load_weight"].get()
+        config = CostConfig(
+            student_stress_weight=stress,
+            teacher_load_weight=teacher,
+        )
 
         self._controller.state.cost_config = config
         self._controller.generate_schedule(sessions=sessions)
@@ -1106,6 +1196,33 @@ class ExamTab(tk.Frame):
         else:
             self._exam_cost_result_label.config(
                 text=f"Student cost: {result.student_cost}")
+
+    # ------------------------------------------------------------------
+    # Optimiser
+    # ------------------------------------------------------------------
+
+    def _on_optimise(self) -> None:
+        if not self._controller.state.schedule_result:
+            messagebox.showinfo("No schedule", "Generate a schedule first.")
+            return
+        if self._controller.state.exam_tree is None:
+            messagebox.showinfo("No data", "Load a timetable first.")
+            return
+
+        stress_w  = self._weight_vars["student_stress_weight"].get()
+        marking_w = self._weight_vars["teacher_load_weight"].get()
+
+        try:
+            old_cost, new_cost = self._controller.optimise_schedule(
+                stress_weight  = stress_w,
+                marking_weight = marking_w,
+            )
+        except Exception as exc:
+            messagebox.showerror("Optimise error", str(exc))
+            return
+
+        self._exam_cost_result_label.config(
+            text=f"Optimised — cost {old_cost:.0f} \u2192 {new_cost:.0f}")
 
     # ------------------------------------------------------------------
     # Penalty breakdown popout
@@ -1220,6 +1337,17 @@ class ExamTab(tk.Frame):
 
     def _on_session_param_changed(self) -> None:
         self._sessions = None
+        try:
+            start = date.fromisoformat(self._sched_start_var.get().strip())
+            end   = date.fromisoformat(self._sched_end_var.get().strip())
+            self._controller.set_session_config(SessionConfig(
+                start=start,
+                end=end,
+                am=self._am_var.get(),
+                pm=self._pm_var.get(),
+            ))
+        except ValueError:
+            pass
         self._update_session_count_label()
 
     def _update_session_count_label(self) -> None:
@@ -1337,6 +1465,30 @@ class ExamTab(tk.Frame):
                                        parent=top)
                 return
             self._sessions = new_sessions
+            # Compute exclusions relative to the full date-range sessions
+            full = self._controller.effective_sessions(
+                self._sched_start_var.get(),
+                self._sched_end_var.get(),
+                self._am_var.get(),
+                self._pm_var.get(),
+            ) or []
+            selected_set = set(new_sessions)
+            excluded = sorted(
+                f"{d.isoformat()} {s}" for d, s in full
+                if (d, s) not in selected_set
+            )
+            try:
+                start = date.fromisoformat(self._sched_start_var.get().strip())
+                end   = date.fromisoformat(self._sched_end_var.get().strip())
+                self._controller.set_session_config(SessionConfig(
+                    start=start,
+                    end=end,
+                    am=self._am_var.get(),
+                    pm=self._pm_var.get(),
+                    excluded_sessions=excluded,
+                ))
+            except ValueError:
+                pass
             self._update_session_count_label()
             top.destroy()
 
