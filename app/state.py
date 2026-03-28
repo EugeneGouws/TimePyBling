@@ -28,6 +28,7 @@ class AppState:
     exam_tree: Optional[ExamTree] = None
     paper_registry: Optional[ExamPaperRegistry] = None
     schedule_result: Optional[ScheduleResult] = None
+    student_optimal_result: Optional[ScheduleResult] = None
     exclusions: set[str] = field(default_factory=lambda: set(DEFAULT_EXCLUSIONS))
     session_config: Optional[SessionConfig] = None
     cost_config: CostConfig = field(default_factory=CostConfig)

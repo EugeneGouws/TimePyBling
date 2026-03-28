@@ -101,9 +101,7 @@ class VerificationTab(tk.Frame):
         _clear(w)
 
         # ── CLASHES ──
-        _write(w, "━" * 60 + "\n", "dim")
         _write(w, "CLASHES\n", "heading")
-        _write(w, "━" * 60 + "\n", "dim")
 
         student_clashes, teacher_clashes = self._controller.find_clashes()
         is_legal = not student_clashes and not teacher_clashes
@@ -113,7 +111,6 @@ class VerificationTab(tk.Frame):
         else:
             _write(w, f"FAIL ✗  —  {len(student_clashes)} student clash(es), "
                       f"{len(teacher_clashes)} teacher clash(es)\n", "fail")
-        _write(w, "─" * 60 + "\n", "dim")
 
         if student_clashes:
             _write(w, "\nSTUDENT DOUBLE-BOOKINGS\n", "heading")
@@ -138,15 +135,12 @@ class VerificationTab(tk.Frame):
                               f"{'  vs  '.join(entry['classes'])}\n", "fail")
 
         total = len(student_clashes) + len(teacher_clashes)
-        _write(w, "\n" + "─" * 60 + "\n", "dim")
-        _write(w, f"Total violations: {total}\n",
+        _write(w, f"\nTotal violations: {total}\n",
                "pass" if total == 0 else "fail")
 
         # ── SCHEDULABLE PAIRS ──
-        _write(w, "\n" + "━" * 60 + "\n", "dim")
-        _write(w, "SCHEDULABLE PAIRS  (share no students — can sit same slot)\n",
+        _write(w, "\nSCHEDULABLE PAIRS  (share no students — can sit same slot)\n",
                "heading")
-        _write(w, "━" * 60 + "\n", "dim")
 
         if self._controller.state.exam_tree is None:
             _write(w, "(Load timetable to see schedulable pairs)\n", "dim")
@@ -156,8 +150,9 @@ class VerificationTab(tk.Frame):
                 _write(w, "  No free pairs — all subjects share students.\n", "dim")
             else:
                 for grade_label, pairs in pairs_by_grade.items():
-                    _write(w, f"\n  {grade_label}  ({len(pairs)} pair(s)):\n",
-                           "heading")
+                    count = len(pairs)
+                    label = "pair" if count == 1 else "pairs"
+                    _write(w, f"\n  {grade_label}  {count} {label}:\n", "heading")
                     for a, b in pairs:
                         _write(w, f"    {a}  +  {b}\n", "pass")
 
@@ -166,7 +161,6 @@ class VerificationTab(tk.Frame):
         w = self._integrity_report
         _clear(w)
         _write(w, "Classes with fewer than 5 students:\n", "dim")
-        _write(w, "─" * 44 + "\n", "dim")
         issues = self._controller.data_integrity_issues()
         if not issues:
             _write(w, "PASS ✓  —  all classes have 5 or more students\n", "pass")

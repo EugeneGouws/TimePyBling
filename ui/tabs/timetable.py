@@ -36,9 +36,12 @@ class TimetableTab(tk.Frame):
                               bg="#ccc", sashwidth=5)
         pane.pack(fill=tk.BOTH, expand=True)
 
+        # Place left pane at 640 px after the window has fully rendered
+        pane.after(200, lambda: pane.sash_place(0, 640, 0))
+
         # ── LEFT — main 8×7 rotation grid ─────────────────────────────
         left = tk.Frame(pane, bg=CLR_WHITE)
-        pane.add(left, minsize=280)
+        pane.add(left, minsize=400)
 
         canvas = tk.Canvas(left, bg=CLR_WHITE, highlightthickness=0)
         vsb = ttk.Scrollbar(left, orient=tk.VERTICAL, command=canvas.yview)
@@ -49,10 +52,12 @@ class TimetableTab(tk.Frame):
         canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
         self._grid_frame = tk.Frame(canvas, bg=CLR_WHITE)
-        canvas.create_window((0, 0), window=self._grid_frame, anchor="nw")
+        grid_win = canvas.create_window((0, 0), window=self._grid_frame, anchor="nw")
         self._grid_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfig(grid_win, width=e.width))
 
         for c in range(8):
             self._grid_frame.columnconfigure(c, weight=1)
@@ -61,14 +66,14 @@ class TimetableTab(tk.Frame):
                  relief=tk.RIDGE, bd=1, padx=8, pady=4
                  ).grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         for col in range(7):
-            tk.Label(self._grid_frame, text=f"P{col+1}",
+            tk.Label(self._grid_frame, text=f"{col+1}",
                      bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
                      fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
                      ).grid(row=0, column=col+1, sticky="nsew", padx=1, pady=1)
 
         self._grid_cells = []
         for day in range(8):
-            tk.Label(self._grid_frame, text=f"D{day+1}",
+            tk.Label(self._grid_frame, text=f"Day {day+1}",
                      bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
                      fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
                      ).grid(row=day+1, column=0, sticky="nsew", padx=1, pady=1)
@@ -89,7 +94,7 @@ class TimetableTab(tk.Frame):
 
         # ── RIGHT — entity timetable viewer ───────────────────────────
         right = tk.Frame(pane, bg=CLR_WHITE)
-        pane.add(right, minsize=420)
+        pane.add(right, minsize=400)
 
         sel = tk.Frame(right, bg=CLR_WHITE, padx=8, pady=6)
         sel.pack(fill=tk.X)
@@ -380,7 +385,7 @@ class TimetableTab(tk.Frame):
                  relief=tk.RIDGE, bd=1, padx=6, pady=4
                  ).grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
         for col in range(7):
-            tk.Label(gf, text=f"P{col+1}",
+            tk.Label(gf, text=f"{col+1}",
                      bg=CLR_GRID_HEADER, font=("Calibri", 10, "bold"),
                      fg="#1E293B", relief=tk.RIDGE, bd=1, padx=6, pady=4
                      ).grid(row=0, column=col+1, padx=1, pady=1, sticky="nsew")

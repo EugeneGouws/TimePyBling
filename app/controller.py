@@ -298,6 +298,8 @@ class AppController:
         self,
         sessions: Optional[list[tuple]] = None,
     ) -> ScheduleResult:
+        """Build student-optimal schedule.  Saves as both schedule_result
+        and student_optimal_result so that Optimise can use the baseline."""
         if self._state.paper_registry is None:
             raise ValueError("paper_registry is not built")
         result = build_schedule(
@@ -307,46 +309,56 @@ class AppController:
             config=self._state.cost_config,
         )
         self._state.schedule_result = result
+        self._state.student_optimal_result = result
         self._bus.publish(EVT_SCHEDULE_GENERATED, state=self._state)
         return result
 
     def optimise_schedule(
         self,
-        stress_weight: int,
-        marking_weight: int,
+        teacher_tolerance_pct: int,
         max_iterations: int = 10_000,
-    ) -> tuple[float, float]:
+    ) -> tuple[float, float, float, float, bool]:
         """
-        Run the hill-climb optimiser over the current schedule result.
+        Optimise teacher marking load within tolerance of student-optimal.
 
-        Returns (old_cost, new_cost) using the two-weight cost function.
+        Returns (old_student, old_teacher, new_student, new_teacher, is_optimal).
         Publishes EVT_SCHEDULE_GENERATED after updating state.
         """
-        from core.cost_function import StudentStressCost, TeacherMarkingCost, TotalCost  # noqa: PLC0415
-        from core.hill_climb import hill_climb                                            # noqa: PLC0415
+        from core.cost_function import StudentStressCost, TeacherMarkingCost  # noqa: PLC0415
 
-        result   = self._state.schedule_result
-        if result is None:
-            raise ValueError("No schedule to optimise — generate one first")
+        baseline = self._state.student_optimal_result
+        if baseline is None:
+            raise ValueError("No student-optimal schedule — generate one first")
         exam_tree = self._state.exam_tree
         registry  = self._state.paper_registry
         if exam_tree is None or registry is None:
             raise ValueError("exam_tree and paper_registry must be available")
 
-        schedule, ordered_days = _build_schedule_dict(result)
+        schedule, ordered_days = _build_schedule_dict(baseline)
 
-        stress  = StudentStressCost(exam_tree, registry, stress_weight)
-        marking = TeacherMarkingCost(exam_tree, registry, marking_weight)
-        cost_fn = TotalCost(stress, marking)
+        stress  = StudentStressCost(exam_tree, registry, weight=100)
+        marking = TeacherMarkingCost(exam_tree, registry, weight=100)
 
-        old_cost                  = cost_fn.compute(schedule)
-        new_schedule, new_cost    = hill_climb(schedule, cost_fn, max_iterations)
+        old_student = stress.compute(schedule)
+        old_teacher = marking.compute(schedule)
+
+        try:
+            from core.hill_climb import hill_climb_teacher  # noqa: PLC0415
+            new_schedule, new_student, new_teacher = hill_climb_teacher(
+                schedule, stress, marking,
+                student_baseline=old_student,
+                tolerance_pct=teacher_tolerance_pct,
+                max_iterations=max_iterations,
+            )
+            is_optimal = False
+        except Exception as exc:
+            raise ValueError(f"Optimisation failed: {exc}") from exc
 
         self._state.schedule_result = _rebuild_schedule_result(
-            new_schedule, result, ordered_days
+            new_schedule, baseline, ordered_days
         )
         self._bus.publish(EVT_SCHEDULE_GENERATED, state=self._state)
-        return old_cost, new_cost
+        return old_student, old_teacher, new_student, new_teacher, is_optimal
 
 
 # ── Schedule dict helpers (module-level) ──────────────────────────────────────
@@ -390,11 +402,9 @@ def _rebuild_schedule_result(
     original: ScheduleResult,
     ordered_days: list,
 ) -> ScheduleResult:
-    """
-    Reconstruct a ScheduleResult from an optimised schedule dict.
+    """Reconstruct a ScheduleResult from an optimised schedule dict.
 
-    Warnings and pinned flags are carried over from the original.
-    penalty_log is cleared (it was computed for the pre-optimise placement).
+    Pinned flags are carried over from the original.
     """
     slot_lookup = {(d, s): idx for idx, (d, s) in enumerate(original.sessions)}
     orig_lookup = {sp.paper.label: sp for sp in original.scheduled}
@@ -412,19 +422,15 @@ def _rebuild_schedule_result(
                 slot_index = slot_idx,
                 date       = day_date,
                 session    = session_str,
-                warnings   = orig_sp.warnings if orig_sp else [],
                 pinned     = orig_sp.pinned if orig_sp else (paper.pinned_slot is not None),
             ))
 
     scheduled.sort(key=lambda sp: sp.slot_index)
 
     return ScheduleResult(
-        scheduled          = scheduled,
-        total_slots        = original.total_slots,
-        total_days         = original.total_days,
-        sessions           = original.sessions,
-        pin_clash_warnings = original.pin_clash_warnings,
-        teacher_warnings   = original.teacher_warnings,
-        student_cost       = 0,
-        penalty_log        = [],
+        scheduled    = scheduled,
+        total_slots  = original.total_slots,
+        total_days   = original.total_days,
+        sessions     = original.sessions,
+        student_cost = 0.0,
     )

@@ -85,7 +85,10 @@ class StateRepository:
             )
 
         if "cost_config" in data:
-            state.cost_config = CostConfig(**data["cost_config"])
+            cc = dict(data["cost_config"])
+            cc.pop("student_stress_weight", None)
+            cc.pop("teacher_load_weight", None)
+            state.cost_config = CostConfig(**cc)
 
         self.pending_papers = dict(data.get("papers", {}))
 

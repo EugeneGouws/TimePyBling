@@ -31,7 +31,6 @@ Nothing in core/ or reader/ imports from app/, file_io/, ui/, or web/.
 
 - core/timetable_tree.py
 - core/conflict_matrix.py
-- reader/exam_scheduler.py
 - reader/exam_clash.py
 - reader/exam_tree.py
 
@@ -42,20 +41,31 @@ Nothing in core/ or reader/ imports from app/, file_io/, ui/, or web/.
 3. build_schedule() → ScheduleResult
 4. Display in UI / export PDF or TXT
 
-## Scheduling algorithm — 7 passes in order (do not reorder)
+## Scheduling algorithm — 3-phase constructive (reader/exam_scheduler.py)
 
-0. ST pinned papers placed first — reserves grade_reserved_slots
-0.5. Linked paper pre-placement — pairs placed consecutively before DSatur
-1. Priority papers (MA, PH) placed Gr12→Gr08 with max spread
-2. Remaining papers via DSatur saturation ordering
-3. Spacing pass — same-subject same-grade same ISO week flagged/swapped
-4. Teacher marking load pass — same subject + teacher in same slot flagged
-5. Hill-climb — quadratic penalty: day=k*(k-1)*day_density_factor,
-   week=(k-1)*(k+week_density_base)//2. AM-first tiebreak on equal cost moves.
+Step 0   Pinned papers (ST + any pinned_slot) placed first.
+         ST papers reserve their slot for their grade.
 
-Difficulty enforcement: _difficulty_allows() checked before every placement.
-Red blocks Red+Yellow same day. Yellow blocks Red same day. Green never blocks.
-Linked partners are exempt from difficulty clash checks with each other.
+Phase 1  RED + LINKED (AM only, 5-day spacing per grade, Gr12 → Gr08).
+         Linked subjects auto-promoted to red.
+         Primary paper placed in best AM slot; partner auto-placed in PM
+         of the same day (fallback: best available AM slot).
+
+Phase 2  YELLOW — fill gaps, AM first; PM unlocks only when AM exhausted.
+         Most-constrained-first ordering. Minimises incremental per-student
+         overlap cost at each placement. Grades Gr12 → Gr08.
+
+Phase 3  GREEN — same logic as Phase 2.
+
+Post     Paper-move hill-climb (20 passes) to locally minimise student cost.
+
+Cost function: per-student overlap cost. Only penalises when a student has
+2+ exams in the same convolution window (_PASSES = [(2,3),(3,2),(4,1)]).
+Red papers 5+ days apart → zero stress score by design.
+
+Teacher optimisation: separate Optimise step (hill_climb_teacher) after
+Generate. Tolerance slider (0%=pure student, 100%=pure teacher) controls
+how much student cost can increase to reduce teacher marking load.
 
 ## Excel input format
 
@@ -81,6 +91,15 @@ Two-digit columns (F25–F67) are exam columns — excluded by regex.
 - No silent exception swallowing
 - Single-line git commit messages only — no multi-line -m strings
 
+## UI Scrolling Convention (Tkinter)
+
+Every UI element that has a scrollbar must bind mouse scroll events:
+
+Vertical scroll: <MouseWheel> → scrolls vertically (yview_scroll)
+Horizontal scroll: <Shift-MouseWheel> → scrolls horizontally (xview_scroll)
+
+This applies to all Treeview, Canvas, Listbox, Text, and Frame-with-scrollbar widgets. Bind on the widget itself and any child widgets that capture focus.
+
 ## Test infrastructure
 
 tests/ does not exist yet. This is intentional.
@@ -105,7 +124,8 @@ Until then, treat the absence of tests as a known project state, not a gap to fl
     "day_density_factor": 5,
     "week_density_base": 6,
     "enforce_student_clash": true,
-    "enforce_constraint_code": true
+    "enforce_constraint_code": true,
+    "teacher_tolerance_pct": 0
   },
   "papers": {
     "MA_12": {
@@ -160,6 +180,14 @@ ast.parse(open('f.py').read())
 
 ## Mistakes log — update after every mistake
 
+2026-03-28 — Session 7: Clean session, no mistakes.
+
+2026-03-27 — Session 6: Static dash-style dividers in verification.py written as
+             hardcoded `"─" * 60` etc. instead of matching the length of the
+             adjacent text. Rule: always use len(heading_text) when writing
+             dash dividers above/below headings in scrolled text widgets.
+             Never use arbitrary round numbers like 60.
+
 2026-03-27 — Session 5: Clean session, no mistakes.
 
 2026-03-26 — Session 3: Edited ui/ui.py (legacy dead file, 108KB) instead of
@@ -182,23 +210,15 @@ ast.parse(open('f.py').read())
 - FIXED 2026-03-26: Constraint codes not saving — from_exam_tree() wiped
   registry on rebuild. Fixed by adding prior parameter.
 - FIXED 2026-03-26: Removing exclusion reset P2/P3 to P1 — same fix.
-- Penalty breakdown and constraint list not visible after schedule generation.
-  Investigate Breakdown button activation, penalty_log rendering, and
-  constraint list in cell popout.
-- Cost panel layout not matching spec. Should show Hard Constraints, Soft
-  Constraints with editable weights, Optimisation Penalties, Rebuild and
-  Breakdown buttons. Verify against Phase C spec.
+- FIXED 2026-03-28: Cost panel redesigned — old dual sliders replaced with
+  single tolerance slider. Panel now matches current design intent.
+- Penalty breakdown popout exists but penalty_log is always empty with the
+  new 3-phase scheduler (PenaltyEntry never populated). Either populate it
+  with per-student overlap data or remove the Breakdown button.
 - Navigate-to-cell unverified. Confirm schedule popout subject codes scroll
   matrix canvas and flash correct cell.
-- State file session round-trip unverified. Session dates, AM/PM toggles,
-  and slot assignments must persist on Save/Load State.
 
 ## Backlog features — do not implement without instruction
 
-- COMPLETED 2026-03-26: Timetable tab: clicking a class shows student names.
-- Timetable tab: right-click empty subblock → context menu to add LIB/ST/BAT
-- Per-student printable exam timetable
-- Simulated annealing optimiser
+- Per-student and per-teacher printable exam timetable
 - Phase 2: web UI via FastAPI (web/ folder is placeholder)
-- Post-Phase C: consecutive teacher marking penalty
-- Post-Phase C: end-of-timetable clustering penalty

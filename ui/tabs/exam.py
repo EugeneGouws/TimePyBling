@@ -24,7 +24,7 @@ from ui.constants import (
     CLR_DIFF_RED, CLR_DIFF_YELLOW, CLR_DIFF_GREEN, CLR_DIFF_GRAY,
     CLR_HOVER, CLR_ST_ROW,
     DEFAULT_EXAM_START, DEFAULT_EXAM_END,
-    WEIGHT_STUDENT_STRESS, WEIGHT_TEACHER_MARKING,
+    DEFAULT_TEACHER_TOLERANCE,
 )
 from ui.helpers import _scrolled_text, _write, _clear
 
@@ -175,6 +175,9 @@ class ExamTab(tk.Frame):
         self._matrix_canvas.bind("<Motion>", self._on_matrix_motion)
         self._matrix_canvas.bind("<Leave>", self._on_matrix_leave)
         self._matrix_canvas.bind("<Button-1>", self._on_matrix_click)
+        self._matrix_canvas.bind("<MouseWheel>", self._on_matrix_mousewheel)
+        self._matrix_canvas.bind("<Button-4>", self._on_matrix_mousewheel)
+        self._matrix_canvas.bind("<Button-5>", self._on_matrix_mousewheel)
 
         self._build_exclusions(left)
 
@@ -273,69 +276,41 @@ class ExamTab(tk.Frame):
                                     font=("Calibri", 10))
 
     def _build_constraints_panel(self, parent: tk.Frame) -> None:
-        lf = tk.LabelFrame(parent, text="Soft Constraints",
+        lf = tk.LabelFrame(parent, text="Teacher Optimisation",
                            bg=CLR_WHITE, font=("Calibri", 10, "bold"),
                            fg=CLR_BLUE, padx=8, pady=6)
         lf.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        self._weight_vars: dict[str, tk.IntVar] = {}
-        self._weight_labels: dict[str, tk.Label] = {}
-        self._updating_sliders = False
-
+        # Single tolerance slider: 0% = pure student, 100% = pure teacher
         sf = tk.Frame(lf, bg=CLR_WHITE)
         sf.pack(fill=tk.X)
         sf.columnconfigure(1, weight=1)
 
-        # Link the two sliders so they always sum to 100
-        def _on_stress(val):
-            if self._updating_sliders:
-                return
-            self._updating_sliders = True
+        tk.Label(sf, text="100% Student", bg=CLR_WHITE, fg=CLR_GREEN,
+                 font=("Calibri", 9)).grid(row=0, column=0, sticky=tk.W)
+        tk.Label(sf, text="100% Teacher", bg=CLR_WHITE, fg=CLR_ORANGE,
+                 font=("Calibri", 9)).grid(row=0, column=2, sticky=tk.E)
+
+        self._tolerance_var = tk.IntVar(value=DEFAULT_TEACHER_TOLERANCE)
+        self._tolerance_label = tk.Label(
+            sf, text=f"{DEFAULT_TEACHER_TOLERANCE}%", bg=CLR_WHITE,
+            fg=CLR_ORANGE, font=("Calibri", 10, "bold"), width=5, anchor=tk.CENTER)
+        self._tolerance_label.grid(row=1, column=2, sticky=tk.E, padx=(4, 0))
+
+        def _on_tolerance(val):
             x = int(float(val))
-            self._weight_vars["teacher_load_weight"].set(100 - x)
-            self._weight_labels["student_stress_weight"].config(text=f"{x}%")
-            self._weight_labels["teacher_load_weight"].config(text=f"{100 - x}%")
-            self._updating_sliders = False
+            self._tolerance_label.config(text=f"{x}%")
 
-        def _on_teacher(val):
-            if self._updating_sliders:
-                return
-            self._updating_sliders = True
-            x = int(float(val))
-            self._weight_vars["student_stress_weight"].set(100 - x)
-            self._weight_labels["teacher_load_weight"].config(text=f"{x}%")
-            self._weight_labels["student_stress_weight"].config(text=f"{100 - x}%")
-            self._updating_sliders = False
-
-        rows = [
-            ("student_stress_weight", "Student stress load",   WEIGHT_STUDENT_STRESS,  _on_stress),
-            ("teacher_load_weight",   "Teacher marking load",  WEIGHT_TEACHER_MARKING, _on_teacher),
-        ]
-
-        for i, (key, label, default, cmd) in enumerate(rows):
-            v = tk.IntVar(value=default)
-            self._weight_vars[key] = v
-
-            tk.Label(sf, text=label, bg=CLR_WHITE, fg="#1E293B",
-                     font=("Calibri", 10), width=20, anchor=tk.W
-                     ).grid(row=i, column=0, sticky=tk.W, pady=3)
-
-            pct_lbl = tk.Label(sf, text=f"{default}%", bg=CLR_WHITE,
-                               fg=CLR_ORANGE, font=("Calibri", 10, "bold"),
-                               width=5, anchor=tk.E)
-            pct_lbl.grid(row=i, column=2, sticky=tk.E, padx=(4, 0))
-            self._weight_labels[key] = pct_lbl
-
-            tk.Scale(sf, variable=v, orient=tk.HORIZONTAL,
-                     from_=0, to=100, resolution=1, showvalue=False,
-                     bg=CLR_WHITE, troughcolor=CLR_LIGHT,
-                     highlightthickness=0, command=cmd
-                     ).grid(row=i, column=1, sticky=tk.EW, padx=(6, 4))
+        tk.Scale(sf, variable=self._tolerance_var, orient=tk.HORIZONTAL,
+                 from_=0, to=100, resolution=1, showvalue=False,
+                 bg=CLR_WHITE, troughcolor=CLR_LIGHT,
+                 highlightthickness=0, command=_on_tolerance
+                 ).grid(row=1, column=0, columnspan=2, sticky=tk.EW, padx=(0, 4))
 
         # Action buttons + cost result
         btn_frame = tk.Frame(lf, bg=CLR_WHITE)
         btn_frame.pack(fill=tk.X, pady=(6, 0))
-        tk.Button(btn_frame, text="Rebuild Schedule",
+        tk.Button(btn_frame, text="Generate Schedule",
                   command=self._generate_exam_schedule,
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Calibri", 10, "bold"), padx=10).pack(side=tk.LEFT)
@@ -389,14 +364,12 @@ class ExamTab(tk.Frame):
                     self._sessions = None
             else:
                 self._sessions = None
-        # Restore soft constraint weights
+        # Restore tolerance slider
         cost = state.cost_config
         if cost is not None:
-            stress = cost.student_stress_weight
-            self._weight_vars["student_stress_weight"].set(stress)
-            self._weight_vars["teacher_load_weight"].set(100 - stress)
-            self._weight_labels["student_stress_weight"].config(text=f"{stress}%")
-            self._weight_labels["teacher_load_weight"].config(text=f"{100 - stress}%")
+            tol = cost.teacher_tolerance_pct
+            self._tolerance_var.set(tol)
+            self._tolerance_label.config(text=f"{tol}%")
         self._refresh_exclusion_listbox()
         self._populate_matrix()
         self._update_sched_grade_list()
@@ -566,6 +539,12 @@ class ExamTab(tk.Frame):
             if registry and registry.papers_for_subject_grade(subj, grade):
                 self._open_cell_popout(subj, grade)
 
+    def _on_matrix_mousewheel(self, event) -> None:
+        if event.num == 5 or event.delta < 0:
+            self._matrix_canvas.yview_scroll(3, "units")
+        elif event.num == 4 or event.delta > 0:
+            self._matrix_canvas.yview_scroll(-3, "units")
+
     def _restore_cell_fill(self, key: tuple[str, str]) -> None:
         subj, grade = key
         registry = self._controller.state.paper_registry
@@ -597,9 +576,9 @@ class ExamTab(tk.Frame):
 
         top = tk.Toplevel(self)
         top.title(f"{subject} \u2014 {grade}")
-        top.geometry("420x560")
         top.configure(bg=CLR_WHITE)
         top.grab_set()
+        top.protocol("WM_DELETE_WINDOW", lambda: (top.grab_release(), top.destroy()))
 
         tk.Label(top, text=f"{subject} \u2014 {grade}",
                  bg=CLR_WHITE, fg=CLR_HEADER,
@@ -614,6 +593,9 @@ class ExamTab(tk.Frame):
         content_canvas.configure(yscrollcommand=csb.set)
         inner = tk.Frame(content_canvas, bg=CLR_WHITE)
         content_canvas.create_window((0, 0), window=inner, anchor="nw")
+        top.bind("<MouseWheel>", lambda e: content_canvas.yview_scroll(-int(e.delta / 120), "units"))
+        top.bind("<Button-4>",   lambda e: content_canvas.yview_scroll(-3, "units"))
+        top.bind("<Button-5>",   lambda e: content_canvas.yview_scroll(3, "units"))
 
         def _refresh_popout():
             for w in inner.winfo_children():
@@ -728,6 +710,9 @@ class ExamTab(tk.Frame):
             picker_sb.pack(side=tk.RIGHT, fill=tk.Y)
             picker_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             picker_canvas.configure(yscrollcommand=picker_sb.set)
+            picker_canvas.bind("<MouseWheel>",
+                               lambda e, c=picker_canvas: c.yview_scroll(
+                                   -int(e.delta / 120), "units"))
             picker_inner = tk.Frame(picker_canvas, bg=CLR_WHITE)
             picker_canvas.create_window((0, 0), window=picker_inner, anchor="nw")
 
@@ -750,23 +735,19 @@ class ExamTab(tk.Frame):
                         return
                     _refresh_popout()
 
-            # Current cell's papers at top, then all others
-            all_papers = sorted(registry.all_papers(), key=lambda p: (
-                0 if (p.subject == subject and p.grade == grade) else 1,
-                p.label))
-            for ap in all_papers:
+            # Only papers for this subject+grade
+            for ap in sorted(registry.papers_for_subject_grade(subject, grade),
+                             key=lambda p: p.label):
                 if ap.label in current_links:
                     continue  # already linked, shown above
                 var = tk.BooleanVar(value=False)
                 link_check_vars[ap.label] = var
-                is_own = (ap.subject == subject and ap.grade == grade)
-                row_bg = "#F0F9FF" if is_own else CLR_WHITE
                 tk.Checkbutton(
                     picker_inner,
                     text=f"{ap.label}  ({ap.student_count()} students)",
                     variable=var,
                     command=_on_check_changed,
-                    bg=row_bg, fg="#1E293B",
+                    bg=CLR_WHITE, fg="#1E293B",
                     selectcolor=CLR_BLUE,
                     font=("Calibri", 9),
                     anchor=tk.W,
@@ -820,7 +801,8 @@ class ExamTab(tk.Frame):
                       font=("Calibri", 10), padx=6).pack(side=tk.LEFT)
 
             # ── Close ──
-            tk.Button(inner, text="Close", command=top.destroy,
+            tk.Button(inner, text="Close",
+                      command=lambda: (top.grab_release(), top.destroy()),
                       bg=CLR_LIGHT, fg="#1E293B", relief=tk.FLAT,
                       font=("Calibri", 10), padx=16, pady=4
                       ).pack(pady=(12, 8))
@@ -881,6 +863,12 @@ class ExamTab(tk.Frame):
         _build_popout_content()
         inner.update_idletasks()
         content_canvas.configure(scrollregion=content_canvas.bbox("all"))
+        top.update_idletasks()
+        content_h = inner.winfo_reqheight()
+        header_h  = top.winfo_reqheight() - content_canvas.winfo_reqheight()
+        max_h     = int(top.winfo_screenheight() * 0.80)
+        win_h     = min(content_h + header_h + 20, max_h)
+        top.geometry(f"480x{win_h}")
 
     # ------------------------------------------------------------------
     # ST cell popout
@@ -896,6 +884,7 @@ class ExamTab(tk.Frame):
         top.geometry("360x400")
         top.configure(bg=CLR_WHITE)
         top.grab_set()
+        top.protocol("WM_DELETE_WINDOW", lambda: (top.grab_release(), top.destroy()))
 
         tk.Label(top, text=f"Study Papers \u2014 {grade}",
                  bg=CLR_WHITE, fg=CLR_HEADER,
@@ -966,7 +955,8 @@ class ExamTab(tk.Frame):
                                    _refresh_st()),
                   bg=CLR_GREEN, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Calibri", 10, "bold"), padx=10).pack(side=tk.LEFT)
-        tk.Button(btn_frame, text="Close", command=top.destroy,
+        tk.Button(btn_frame, text="Close",
+                  command=lambda: (top.grab_release(), top.destroy()),
                   bg=CLR_LIGHT, fg="#1E293B", relief=tk.FLAT,
                   font=("Calibri", 10), padx=10).pack(side=tk.LEFT, padx=8)
 
@@ -1033,19 +1023,21 @@ class ExamTab(tk.Frame):
         code = self._excl_entry.get().strip().upper()
         if not code:
             return
-        new_excl = set(self._controller.state.exclusions)
-        new_excl.add(code)
+        self._controller.state.exclusions.add(code)
         self._excl_entry.delete(0, tk.END)
-        self._controller.set_exclusions(new_excl)
+        self._refresh_exclusion_listbox()
+        self._populate_matrix()
+        self._update_session_count_label()
 
     def _remove_exclusion(self) -> None:
         sel = self._excl_listbox.curselection()
         if not sel:
             return
         code = self._excl_listbox.get(sel[0])
-        new_excl = set(self._controller.state.exclusions)
-        new_excl.discard(code)
-        self._controller.set_exclusions(new_excl)
+        self._controller.state.exclusions.discard(code)
+        self._refresh_exclusion_listbox()
+        self._populate_matrix()
+        self._update_session_count_label()
 
     # ------------------------------------------------------------------
     # Import / Export state
@@ -1101,16 +1093,6 @@ class ExamTab(tk.Frame):
                 "Check AM/PM checkboxes and date range.")
             return
 
-        # Build CostConfig from soft constraint sliders
-        from app.cost_config import CostConfig  # noqa: PLC0415
-        stress  = self._weight_vars["student_stress_weight"].get()
-        teacher = self._weight_vars["teacher_load_weight"].get()
-        config = CostConfig(
-            student_stress_weight=stress,
-            teacher_load_weight=teacher,
-        )
-
-        self._controller.state.cost_config = config
         self._controller.generate_schedule(sessions=sessions)
 
     def _render_schedule(self) -> None:
@@ -1141,7 +1123,7 @@ class ExamTab(tk.Frame):
             _write(w, f"Filtered: {grade_filter}\n", "dim")
         _write(w, "\u2500" * 68 + "\n", "dim")
         _write(w, f"  {'Date':<14} {'Sess':<5} {'Paper':<22} "
-                  f"{'Students':>8}  Warnings\n", "header")
+                  f"{'Students':>8}\n", "header")
         _write(w, "\u2500" * 68 + "\n", "dim")
 
         prev_date = None
@@ -1151,28 +1133,13 @@ class ExamTab(tk.Frame):
             prev_date = sp.date
             date_str  = sp.date.strftime("%a %d %b")
             pin_mark  = " \U0001f4cc" if sp.pinned else ""
-            warn_flag = "  \u26a0" if sp.warnings else ""
             line = (f"  {date_str:<14} {sp.session:<5} "
                     f"{sp.paper.label:<22} "
-                    f"{sp.paper.student_count():>8}{pin_mark}{warn_flag}\n")
+                    f"{sp.paper.student_count():>8}{pin_mark}\n")
             tag = "am" if sp.session == "AM" else "pm"
             _write(w, line, tag)
 
         _write(w, "\u2500" * 68 + "\n", "dim")
-
-        all_warnings = [w_msg for sp in items for w_msg in sp.warnings]
-        seen: set[str] = set()
-        unique_warnings = [x for x in all_warnings
-                           if not (x in seen or seen.add(x))]
-        if unique_warnings:
-            _write(w, "\nWarnings:\n", "warn")
-            for msg in unique_warnings:
-                _write(w, f"  \u26a0  {msg}\n", "warn")
-
-        if result.teacher_warnings:
-            _write(w, "\nTeacher marking load conflicts:\n", "warn")
-            for msg in result.teacher_warnings:
-                _write(w, f"  \u26a0  {msg}\n", "warn")
 
     # ------------------------------------------------------------------
     # Cost display
@@ -1183,19 +1150,8 @@ class ExamTab(tk.Frame):
         if not result:
             self._exam_cost_result_label.config(text="")
             return
-
-        if hasattr(result, "penalty_log") and result.penalty_log:
-            by_type: dict[str, int] = defaultdict(int)
-            for entry in result.penalty_log:
-                by_type[entry.constraint] += entry.value
-            total = sum(by_type.values())
-            lines = [f"Total cost: {total}"]
-            for constraint, subtotal in sorted(by_type.items()):
-                lines.append(f"  {constraint}: {subtotal}")
-            self._exam_cost_result_label.config(text="\n".join(lines))
-        else:
-            self._exam_cost_result_label.config(
-                text=f"Student cost: {result.student_cost}")
+        self._exam_cost_result_label.config(
+            text=f"Student cost: {result.student_cost:.1f}")
 
     # ------------------------------------------------------------------
     # Optimiser
@@ -1209,20 +1165,21 @@ class ExamTab(tk.Frame):
             messagebox.showinfo("No data", "Load a timetable first.")
             return
 
-        stress_w  = self._weight_vars["student_stress_weight"].get()
-        marking_w = self._weight_vars["teacher_load_weight"].get()
+        tolerance = self._tolerance_var.get()
 
         try:
-            old_cost, new_cost = self._controller.optimise_schedule(
-                stress_weight  = stress_w,
-                marking_weight = marking_w,
+            old_s, old_t, new_s, new_t, is_optimal = (
+                self._controller.optimise_schedule(
+                    teacher_tolerance_pct=tolerance,
+                )
             )
         except Exception as exc:
             messagebox.showerror("Optimise error", str(exc))
             return
 
         self._exam_cost_result_label.config(
-            text=f"Optimised — cost {old_cost:.0f} \u2192 {new_cost:.0f}")
+            text=f"Optimised \u2014 Student: {old_s:.0f} \u2192 {new_s:.0f}  "
+                 f"Teacher: {old_t:.0f} \u2192 {new_t:.0f}")
 
     # ------------------------------------------------------------------
     # Penalty breakdown popout
@@ -1428,6 +1385,8 @@ class ExamTab(tk.Frame):
         v_sb.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         canvas.configure(yscrollcommand=v_sb.set)
+        canvas.bind("<MouseWheel>",
+                     lambda e: canvas.yview_scroll(-int(e.delta / 120), "units"))
         inner = tk.Frame(canvas, bg=CLR_WHITE)
         canvas.create_window((0, 0), window=inner, anchor="nw")
 
@@ -1519,6 +1478,8 @@ class ExamTab(tk.Frame):
         top.title(f"Pin {paper.label} to slot")
         top.geometry("310x420")
         top.configure(bg=CLR_WHITE)
+        top.grab_set()
+        top.focus_force()
 
         tk.Label(top, text=f"Select a slot for  {paper.label}:",
                  bg=CLR_WHITE, fg=CLR_HEADER, font=("Calibri", 11, "bold")
@@ -1534,6 +1495,7 @@ class ExamTab(tk.Frame):
                         selectmode=tk.SINGLE, yscrollcommand=lb_sb.set)
         lb_sb.config(command=lb.yview)
         lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        lb.bind("<MouseWheel>", lambda e: lb.yview_scroll(-int(e.delta / 120), "units"))
 
         for i, (d, sess) in enumerate(sessions):
             marker = "  \U0001f4cc" if paper.pinned_slot == i else ""
@@ -1549,6 +1511,10 @@ class ExamTab(tk.Frame):
         btn_frame = tk.Frame(top, bg=CLR_WHITE, pady=8)
         btn_frame.pack(fill=tk.X, padx=10)
 
+        def _close():
+            top.grab_release()
+            top.destroy()
+
         def _pin():
             sel = lb.curselection()
             if not sel:
@@ -1557,13 +1523,15 @@ class ExamTab(tk.Frame):
             self._bus.publish(EVT_PAPERS_CHANGED, state=self._controller.state)
             if on_done:
                 on_done()
-            top.destroy()
+            _close()
+
+        top.protocol("WM_DELETE_WINDOW", _close)
 
         tk.Button(btn_frame, text="Pin to slot", command=_pin,
                   bg=CLR_PINK, fg=CLR_WHITE, relief=tk.FLAT,
                   font=("Calibri", 10, "bold"), padx=16, pady=4
                   ).pack(side=tk.LEFT)
-        tk.Button(btn_frame, text="Cancel", command=top.destroy,
+        tk.Button(btn_frame, text="Cancel", command=_close,
                   bg=CLR_LIGHT, fg="#1E293B", font=("Calibri", 10),
                   relief=tk.FLAT, padx=10, pady=4
                   ).pack(side=tk.LEFT, padx=8)
@@ -1616,9 +1584,25 @@ class ExamTab(tk.Frame):
         v_sb.pack(side=tk.RIGHT,  fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         canvas.configure(xscrollcommand=h_sb.set, yscrollcommand=v_sb.set)
+        canvas.bind("<MouseWheel>",
+                     lambda e: canvas.yview_scroll(-int(e.delta / 120), "units"))
+        canvas.bind("<Shift-MouseWheel>",
+                     lambda e: canvas.xview_scroll(-int(e.delta / 120), "units"))
+        canvas.bind("<Button-4>",
+                     lambda e: canvas.yview_scroll(-3, "units"))
+        canvas.bind("<Button-5>",
+                     lambda e: canvas.yview_scroll(3, "units"))
+        canvas.bind("<Shift-Button-4>",
+                     lambda e: canvas.xview_scroll(-3, "units"))
+        canvas.bind("<Shift-Button-5>",
+                     lambda e: canvas.xview_scroll(3, "units"))
 
         gf = tk.Frame(canvas, bg=CLR_WHITE)
         canvas.create_window((0, 0), window=gf, anchor="nw")
+        gf.bind("<MouseWheel>",
+                lambda e: canvas.yview_scroll(-int(e.delta / 120), "units"))
+        gf.bind("<Shift-MouseWheel>",
+                lambda e: canvas.xview_scroll(-int(e.delta / 120), "units"))
 
         HDR_BG = CLR_GRID_HEADER
         gf.columnconfigure(0, weight=2)

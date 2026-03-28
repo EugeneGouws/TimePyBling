@@ -1,8 +1,7 @@
 from datetime import date
 
-DEFAULT_EXCLUSIONS   = {"ST", "LIB", "PE", "RDI"}
-SESSIONS             = ["AM", "PM"]
-TEACHER_SUBJECT_COLS = ["sua", "sub", "suc"]
+DEFAULT_EXCLUSIONS = {"ST", "LIB", "PE", "RDI"}
+SESSIONS           = ["AM", "PM"]
 
 # Rotation timetable grid: 8 days × 7 periods.
 # Each entry is the subblock that falls in that (day, period) slot.
@@ -47,6 +46,5 @@ CLR_DIFF_GRAY   = "#E5E7EB"
 CLR_HOVER       = "#BFDBFE"
 CLR_ST_ROW      = "#EDE9FE"
 
-# Default cost-function weights (0-100, should sum to 100)
-WEIGHT_STUDENT_STRESS:  int = 50
-WEIGHT_TEACHER_MARKING: int = 50
+# Default teacher-optimisation tolerance (0 = pure student, 100 = pure teacher)
+DEFAULT_TEACHER_TOLERANCE: int = 0

@@ -1,22 +1,24 @@
 """
 hill_climb.py
 -------------
-Slot-swap hill-climb optimiser over an exam schedule.
+Slot-swap hill-climb optimisers over an exam schedule.
 
 A "move" is a slot-swap: two (day, session) slots exchange their paper lists,
 including swapping with an empty slot.  Pinned papers are never moved.
 
-Delta cost is computed by recomputing only the windows that contain at least
-one of the two swapped days, not the full schedule.
-
 Public API
 ----------
-hill_climb(schedule, cost_fn, max_iterations) -> (schedule, final_cost)
+hill_climb(schedule, cost_fn, max_iterations)
+    -> (schedule, final_cost)
+
+hill_climb_teacher(schedule, student_cost_fn, teacher_cost_fn,
+                   student_baseline, tolerance_pct, max_iterations)
+    -> (schedule, final_student_cost, final_teacher_cost)
 """
 
 from __future__ import annotations
 
-from core.cost_function import TotalCost
+from core.cost_function import TotalCost, StudentStressCost, TeacherMarkingCost
 
 _PASSES = [(2, 3), (3, 2), (4, 1)]
 
@@ -51,6 +53,14 @@ def _affected_windows(
 def _has_pinned(papers: list) -> bool:
     """True if any paper in the list is pinned."""
     return any(p.pinned_slot is not None for p in papers)
+
+
+def _am_constraint_ok(sched: dict, d1: int, d2: int) -> bool:
+    """After a swap on days *d1*/*d2*, verify PM has papers only if AM does."""
+    for d in {d1, d2}:
+        if sched.get((d, "PM"), []) and not sched.get((d, "AM"), []):
+            return False
+    return True
 
 
 def hill_climb(
@@ -108,6 +118,10 @@ def hill_climb(
 
                 sched[k1], sched[k2] = sched[k2], sched[k1]
 
+                if not _am_constraint_ok(sched, d1, d2):
+                    sched[k1], sched[k2] = sched[k2], sched[k1]
+                    continue
+
                 cost_after = cost_fn.compute_windows(sched, affected)
 
                 if cost_after - cost_before < 0:
@@ -120,3 +134,73 @@ def hill_climb(
             break
 
     return sched, cost_fn.compute(sched)
+
+
+def hill_climb_teacher(
+    schedule: dict,
+    student_cost_fn: StudentStressCost,
+    teacher_cost_fn: TeacherMarkingCost,
+    student_baseline: float,
+    tolerance_pct: int,
+    max_iterations: int = 10_000,
+) -> tuple[dict, float, float]:
+    """
+    Hill-climb to minimise teacher marking cost within student tolerance.
+
+    Accepts a swap only if:
+      1. Teacher cost decreases, AND
+      2. Student cost stays at or below student_baseline * (1 + tolerance_pct/100)
+
+    Returns (optimised_schedule, final_student_cost, final_teacher_cost).
+    """
+    sched = {k: list(v) for k, v in schedule.items()}
+
+    if not sched:
+        return sched, 0.0, 0.0
+
+    max_student = student_baseline * (1 + tolerance_pct / 100)
+    max_day  = max(d for d, _ in sched)
+    all_keys = sorted(sched.keys())
+
+    current_teacher = teacher_cost_fn.compute(sched)
+
+    for _iteration in range(max_iterations):
+        improved = False
+
+        for i, k1 in enumerate(all_keys):
+            d1, _ = k1
+
+            for k2 in all_keys[i + 1:]:
+                d2, _ = k2
+
+                papers1 = sched[k1]
+                papers2 = sched[k2]
+
+                if _has_pinned(papers1) or _has_pinned(papers2):
+                    continue
+                if not papers1 and not papers2:
+                    continue
+
+                sched[k1], sched[k2] = sched[k2], sched[k1]
+
+                if not _am_constraint_ok(sched, d1, d2):
+                    sched[k1], sched[k2] = sched[k2], sched[k1]
+                    continue
+
+                new_teacher = teacher_cost_fn.compute(sched)
+                if new_teacher < current_teacher:
+                    new_student = student_cost_fn.compute(sched)
+                    if new_student <= max_student:
+                        current_teacher = new_teacher
+                        improved = True
+                        continue
+
+                # Revert
+                sched[k1], sched[k2] = sched[k2], sched[k1]
+
+        if not improved:
+            break
+
+    final_student = student_cost_fn.compute(sched)
+    final_teacher = teacher_cost_fn.compute(sched)
+    return sched, final_student, final_teacher
