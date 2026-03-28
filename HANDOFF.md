@@ -71,19 +71,25 @@ Branch: v2.0
 
 ## Next session plan (Session 8)
 
-1. **Live test the new scheduler** — load ST1.xlsx, configure red/yellow/green
-   and linked papers, generate schedule. Verify:
-   - Red papers 5+ days apart per grade
-   - Linked partners in PM of same day
-   - Student cost = 0 for a grade with only red papers spaced correctly
-   - PM slots only used after AM exhausted
-   - No warnings displayed anywhere
+**Priority issues flagged by user after session end:**
 
-2. **Optimise button end-to-end** — set tolerance to 50%, click Optimise.
-   Confirm student cost increases ≤ 50% of baseline, teacher cost decreases.
-   Click Generate again, confirm reset to student-optimal.
+1. **AM-first mechanic needs per-grade AM slot tracking** — the current
+   `pm_unlocked` flag is global across all grades. Phases 2 and 3 need to
+   track remaining AM slots per grade independently so AM is exhausted
+   per-grade before PM unlocks for that grade.
 
-3. **Fix or remove Breakdown button** — penalty_log is always empty. Either
+2. **Hill-climb needs more passes** — 20 passes is not enough. Verify via the
+   debug window and increase until convergence. Consider a convergence check
+   rather than a fixed pass count.
+
+3. **CostConfig needs updating** — legacy fields (same_week_penalty,
+   teacher_load_penalty, day_density_factor, week_density_base) are dead
+   weight. Review and strip fields that no longer drive the new algorithm.
+
+4. **5-day red paper spacing needs tweaking** — the current hard 5-day gap may
+   be too rigid or not working correctly in all cases. Debug and adjust.
+
+5. **Fix or remove Breakdown button** — penalty_log is always empty. Either
    remove the button, or populate penalty_log from the per-student overlap data
    after placement.
 
